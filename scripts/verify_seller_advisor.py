@@ -836,6 +836,9 @@ def main() -> int:  # noqa: PLR0915
         check("no listing was created", not any(
             i["name"].startswith("selling a barely") for i in seller.get("/api/seller/items").json()))
 
+        # Upload-shaped (the API rejects anything else) but never written: the
+        # fake pipeline only records the path, it does not load the file.
+        MISSING_UPLOAD = "uploads/" + "0" * 32 + ".jpg"
         draft = ListingDraft(
             name="IKEA desk lamp",
             summary="White IKEA desk lamp, works, small scuff.",
@@ -847,15 +850,15 @@ def main() -> int:  # noqa: PLR0915
         with ok_run, use_fake_route("publishing_agent"):
             r = seller.post("/api/seller/advisor/chat",
                             json={"message": "white ikea desk lamp, works, small scuff",
-                                  "photo_path": "nope/missing.jpg"})
+                                  "photo_path": MISSING_UPLOAD})
         body = r.json()
         pub_thread = body["thread_id"]
         check("a clean submission produces a reviewable draft",
               body["publish_draft"]["name"] == "IKEA desk lamp"
               and body["publish_draft"]["ready"] is True, r.text[:250])
         check("the photo travels to both steps",
-              ok_run.compliance_calls[0]["photo_path"] == "nope/missing.jpg"
-              and ok_run.extract_calls[0]["photo_path"] == "nope/missing.jpg")
+              ok_run.compliance_calls[0]["photo_path"] == MISSING_UPLOAD
+              and ok_run.extract_calls[0]["photo_path"] == MISSING_UPLOAD)
         check("nothing was written to the database by drafting",
               not any(i["name"] == "IKEA desk lamp" for i in seller.get("/api/seller/items").json()))
 
