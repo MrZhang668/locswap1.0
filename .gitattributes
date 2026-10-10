@@ -1,0 +1,2 @@
+# Deploy scripts run on Linux servers; keep LF regardless of the cloning OS.
+*.sh text eol=lf

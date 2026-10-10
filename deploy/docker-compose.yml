@@ -1,0 +1,62 @@
+# LocSwap on one host: the app behind nginx.
+#
+#   docker compose --env-file ../.env.production up -d --build
+#
+# The app is not published on the host — only nginx is. Everything reaches the
+# API through the proxy, which is what lets TLS and the rate limit apply to
+# every request rather than to whichever ones happen to go through the front
+# door.
+
+# Fixed project name so the data volume is always `locswap_locswap-data`,
+# whatever directory compose is run from — the deploy and backup scripts
+# address it by that name.
+name: locswap
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file: ../.env.production
+    environment:
+      ENVIRONMENT: production
+    volumes:
+      # The database, the advisor's thread store, uploaded photos. Losing this
+      # volume loses every account and listing — it is the only stateful thing
+      # here, and it is not in the image.
+      - locswap-data:/app/data
+    expose:
+      - "8010"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8010/api/health"]
+      interval: 30s
+      timeout: 5s
+      # The first start rebuilds the whole vector index, which takes a while on
+      # a small instance. A short start period would have the orchestrator kill
+      # it mid-rebuild, forever.
+      start_period: 240s
+      retries: 3
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./locswap-locations.inc:/etc/nginx/conf.d/locswap-locations.inc:ro
+      # Certificates, once certbot has issued them. Empty until then; the
+      # HTTP-only server block works without it.
+      - ./certs:/etc/nginx/certs:ro
+      - certbot-webroot:/var/www/certbot
+
+volumes:
+  locswap-data:
+  certbot-webroot:

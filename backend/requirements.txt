@@ -1,0 +1,46 @@
+# --- Web ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
+# --- Persistence ---
+SQLAlchemy>=2.0
+pydantic>=2.7
+pydantic-settings>=2.2
+python-dotenv>=1.0
+
+# --- Retrieval ---
+rank_bm25>=0.2.2
+# Chinese word segmentation for BM25 and structured matching (services/text.py).
+# Not optional in practice: without it text.py falls back to character bigrams
+# with only a log warning, and BM25_MIN_SCORE=5.0 was calibrated on jieba tokens.
+jieba>=0.42
+chromadb>=0.5
+numpy>=1.26
+# Milvus / Zilliz Cloud backend (VECTOR_BACKEND=milvus). Optional: the import is
+# deferred, so leaving it uninstalled only disables that one backend.
+pymilvus>=2.5
+
+# --- LLM ---
+anthropic>=0.40
+
+# --- Agent orchestration (call sites C and D) ---
+# The agent stack runs on LangGraph; call sites A and B stay on the plain SDK
+# wrapper in services/llm.py. Install the provider package matching
+# LLM_PROVIDER - both are listed so either configuration works out of the box.
+langgraph>=1.0
+# The advisor's thread store (agents/graph.py get_checkpointer). A separate
+# package from langgraph; missing it fails every advisor turn and every
+# transcript read, and both are caught and logged, so nothing returns 5xx.
+langgraph-checkpoint-sqlite>=3.0
+langchain>=1.0
+langchain-core>=1.0
+langchain-openai>=1.0
+langchain-anthropic>=1.0
+
+# --- Images ---
+pillow>=10.0
+
+# --- Local embedding (optional; falls back to the built-in hashing encoder when missing) ---
+# Heavy (pulls torch). If you don't need real semantic vectors, skip it.
+sentence-transformers>=3.0

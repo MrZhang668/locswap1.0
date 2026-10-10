@@ -1,0 +1,18 @@
+# nginx with the built frontend inside it.
+#
+# The frontend is built here rather than copied out of the app image so the two
+# images stay independent: the web tier can be rebuilt and rolled without
+# touching the Python service, and nothing has to reach across containers at
+# runtime to find static files.
+
+FROM node:20-alpine AS build
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM nginx:1.27-alpine
+COPY --from=build /web/dist /usr/share/nginx/html
+# The server blocks and the shared location rules are bind-mounted by compose,
+# so editing them does not need an image rebuild.

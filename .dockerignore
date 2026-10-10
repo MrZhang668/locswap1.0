@@ -1,0 +1,25 @@
+# Keep the build context small and deterministic. Without this, `COPY frontend/`
+# drags in node_modules and dist from the host — hundreds of megabytes, and a
+# host-built dist that would silently shadow the one built in the image.
+**/node_modules
+**/dist
+**/.vite
+**/__pycache__
+**/*.pyc
+.venv/
+venv/
+
+# Never into an image: live data and live secrets.
+data/
+.env
+.env.production
+.env.*.local
+deploy/certs/
+
+# Not needed at runtime.
+*.zip
+_backups/
+backups/
+docs/
+**/*.log
+.git/
