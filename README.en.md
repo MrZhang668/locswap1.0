@@ -14,7 +14,7 @@ So the buyer side uses **rule-based parsing plus three-leg conversational retrie
 
 ## Features
 
-### Buyers (no LLM required)
+### Buyers
 
 - **Browse board**:
   - Filter by keyword, category, price range, condition and distance, with 5 sort orders and paging.
