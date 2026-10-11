@@ -29,8 +29,8 @@ from .routers import (
     wants,
 )
 from .services.item_index import get_item_index
-from .services.publishing.rules import rebuild_index as rebuild_rule_index
-from .services.publishing.rules import seed_rules
+from .services.agents.publishing.rules import rebuild_index as rebuild_rule_index
+from .services.agents.publishing.rules import seed_rules
 from .services.scheduler import expiry_loop, sale_plan_loop
 from .services.want_index import get_want_index
 

@@ -27,10 +27,10 @@ import threading
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ...config import settings
-from ...models import ListingRule, RuleSeverity
-from ..embedding import get_embedding_provider
-from ..vector_store import build_vector_store
+from ....config import settings
+from ....models import ListingRule, RuleSeverity
+from ...embedding import get_embedding_provider
+from ...vector_store import build_vector_store
 
 logger = logging.getLogger(__name__)
 

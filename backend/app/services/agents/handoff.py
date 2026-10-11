@@ -49,7 +49,7 @@ from sqlalchemy.orm import Session
 
 from ...models import ItemStatus
 from ...repositories import ItemRepository
-from . import intent_plan
+from ..nlp import intent_rules
 from .router import MISSING_ITEM_ROUTE
 
 logger = logging.getLogger(__name__)
@@ -196,8 +196,8 @@ def _by_name(db: Session, seller_id: int, pending: list[dict[str, Any]]) -> list
     found: list[dict[str, Any]] = []
     seen: set[int] = set()
     for item in pending:
-        winner = intent_plan.best_match(
-            intent_plan.match_listings(str(item.get("name") or ""), listings)
+        winner = intent_rules.best_match(
+            intent_rules.match_listings(str(item.get("name") or ""), listings)
         )
         if winner and int(winner["item_id"]) not in seen:
             seen.add(int(winner["item_id"]))

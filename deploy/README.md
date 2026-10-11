@@ -121,7 +121,7 @@ scp root@<IP>:/root/locswap-*.tar.gz .
 
 ## 会咬人的几件事
 
-**只能单 worker，这不是调优选项。** 卖家顾问有两样东西放在进程内存里：候选卡片到买家需求的映射（`services/seller_advisor/tools.py`），
+**只能单 worker，这不是调优选项。** 卖家顾问有两样东西放在进程内存里：候选卡片到买家需求的映射（`services/agents/sales/tools.py`），
 以及 LangGraph 等待"是/否"确认时挂起的线程状态。第二个 worker 两样都拿不到，卖家会随机看到"候选列表已过期"。
 要横向扩容，得先把这两样搬进数据库，不是改个配置。
 

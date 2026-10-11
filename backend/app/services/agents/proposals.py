@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from ...config import settings
 from ...models import Item, ItemStatus
-from ..seller_advisor import tools as tool_impl
+from .sales import tools as tool_impl
 
 logger = logging.getLogger(__name__)
 

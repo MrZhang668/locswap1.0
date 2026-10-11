@@ -7,8 +7,8 @@
 当下看不见**：他看到的只是一句「记下了」。所以下面每一个写操作都遵守三条：
 
 1. **plan_id 一律回解**（`resolve_owned_plan`）。模型可以说出任何整数，只有属于
-   这位卖家的才解析得到行，和 `seller_advisor.tools.resolve_owned_item` 同一条闸门。
-2. **日期由后端换算**。工具收的是卖家的原话，`intent_plan.parse_target_date` 把它
+   这位卖家的才解析得到行，和 `sales.tools.resolve_owned_item` 同一条闸门。
+2. **日期由后端换算**。工具收的是卖家的原话，`intent_rules.parse_target_date` 把它
    变成日期；模型自己算的那个值只在词法规则没覆盖时兜底，并且要过未来性校验。
 3. **回执的承诺文案由服务端生成**。系统会做什么、不会做什么，是常量拼出来的，
    不是模型现写的。一旦口头答应了一个不存在的行为，卖家会按它安排自己的时间。
@@ -30,12 +30,12 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ...config import settings
-from ...models import Item, ItemStatus, NotificationType, SalePlan, SalePlanStatus, User
-from ...repositories import ItemRepository
-from .. import sale_plans as plan_service
-from ..agents import intent_plan
-from ..seller_advisor.tools import ToolError
+from ....config import settings
+from ....models import Item, ItemStatus, NotificationType, SalePlan, SalePlanStatus, User
+from ....repositories import ItemRepository
+from ... import sale_plans as plan_service
+from ...nlp import intent_rules
+from ..sales.tools import ToolError
 from .schemas import (
     CancelSalePlanInput,
     CreateSalePlanInput,
@@ -126,8 +126,8 @@ def _hide_for_plan(db: Session, seller_id: int, item_id: int) -> tuple[bool, str
     有活跃预订时**不收**：买家手里攥着一个倒计时，把东西从他脚下抽走比让卖家先把
     预订处理完更糟。这时候如实报告，计划照记。
     """
-    from ..item_index import get_item_index
-    from ..lifecycle import LifecycleError, LifecycleService
+    from ...item_index import get_item_index
+    from ...lifecycle import LifecycleError, LifecycleService
 
     item = db.get(Item, int(item_id))
     seller = db.get(User, int(seller_id))
@@ -232,7 +232,7 @@ def _resolve_date(phrase: str, raw_date: str) -> tuple[date, str]:
     几周后有没有一封邮件发出去；后端那套词法规则至少每次都一样，错了也错得可复现。
     """
     if phrase.strip():
-        parsed, basis = intent_plan.parse_target_date(phrase.strip())
+        parsed, basis = intent_rules.parse_target_date(phrase.strip())
         if parsed is not None:
             return parsed, basis
 
@@ -357,7 +357,7 @@ def create_sale_plan(
 def _match_listing(db: Session, seller_id: int, name: str) -> int | None:
     """这个名字是不是指向一件已经在售的商品。
 
-    用的是 `intent_plan` 那套 token 重合 + 严格占优，不是子串包含——「桌」会命中
+    用的是 `intent_rules` 那套 token 重合 + 严格占优，不是子串包含——「桌」会命中
     「桌面麦克风」，而把计划挂到错的商品上，周扫描就会一直报另一件东西的数字。
     """
     # PLANNABLE 而不是 SEARCHABLE：一件**已经被收起来**的商品仍然是计划的对象——
@@ -368,7 +368,7 @@ def _match_listing(db: Session, seller_id: int, name: str) -> int | None:
         for i in ItemRepository(db).list_by_seller(int(seller_id))
         if i.status in ItemStatus.PLANNABLE
     ]
-    winner = intent_plan.best_match(intent_plan.match_listings(name, listings))
+    winner = intent_rules.best_match(intent_rules.match_listings(name, listings))
     return int(winner["item_id"]) if winner else None
 
 

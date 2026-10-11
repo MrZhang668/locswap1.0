@@ -23,7 +23,7 @@ from ..schemas import (
 from ..services.item_index import ItemIndexService
 from ..services.lifecycle import LifecycleError, LifecycleService
 from ..services import sale_plans as sale_plan_service
-from ..services.seller_advisor.tools import resolve_candidate
+from ..services.agents.sales.tools import resolve_candidate
 from ..services.views import build_buyer_row, build_seller_item
 from ..services.wants import PushError, push_item_to_want
 
@@ -232,9 +232,9 @@ class SalePlanRow(BaseModel):
 
 
 def _plan_row(plan, master_enabled: bool) -> SalePlanRow:
-    # 视图由 plan_agent 的工具层算，不在这里重算一遍：`watching_now` 是四个条件
+    # 视图由 agents.planning 的工具层算，不在这里重算一遍：`watching_now` 是四个条件
     # 的合成，两处各写一份迟早会给出不同的答案，而卖家看到的正是这一个布尔值。
-    from ..services.plan_agent.tools import _view
+    from ..services.agents.planning.tools import _view
 
     v = _view(plan, master_enabled)
     return SalePlanRow(
@@ -303,7 +303,7 @@ def set_sale_watch(
 ) -> SaleWatchState:
     """开 / 关总开关。
 
-    这个端点和 `plan_agent` 的 `set_plan_watch` 工具**改的是同一个字段**，不是
+    这个端点和 `agents.planning` 的 `set_plan_watch` 工具**改的是同一个字段**，不是
     各记各的。两边各存一份状态，就会出现卖家用嘴关掉之后界面上的开关还亮着——
     而那个亮着的开关在说假话，比没有这个开关更糟。
 
@@ -323,8 +323,8 @@ def patch_sale_plan(
     db: Session = Depends(get_db),
 ) -> SalePlanRow:
     """单条计划的开关。停掉 ≠ 撤掉：停掉随时能开，撤掉（DELETE）要重排。"""
-    from ..services.plan_agent.tools import resolve_owned_plan
-    from ..services.seller_advisor.tools import ToolError
+    from ..services.agents.planning.tools import resolve_owned_plan
+    from ..services.agents.sales.tools import ToolError
 
     try:
         plan = resolve_owned_plan(db, user.id, plan_id)

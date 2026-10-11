@@ -130,10 +130,11 @@ def test_switch_off() -> None:
 def test_apply_overlay() -> None:
     section("盖进 hints：下游没改，但读到的是模型的判断")
     from app.services.agents import defer_intent as D
-    from app.services.agents import intent_plan, router as router_mod
+    from app.services.nlp import intent_rules
+    from app.services.agents import router as router_mod
 
     msg = "我想在2个月后出售这支笔，成色良好"
-    hints = intent_plan.hints(msg, [])
+    hints = intent_rules.hints(msg, [])
     reading = D.DeferReading(
         is_defer=True, time_phrase="2个月后", sell_action="出售",
         target_date=(date.today() + timedelta(days=60)).isoformat(),
@@ -151,7 +152,7 @@ def test_apply_overlay() -> None:
           agent == "defer_sale" and scen == "none", f"{agent}/{scen}")
 
     # 反方向：词法说是延后，模型说不是——以模型为准，这正是这次改造要的方向。
-    hints2 = intent_plan.hints("等学期末再挂出去", [])
+    hints2 = intent_rules.hints("等学期末再挂出去", [])
     check("前提：词法层本来判为延后", hints2["defer_sale_intent"] is True)
     D.apply(hints2, D.DeferReading(is_defer=False, source="model", reason="问的是行情"))
     check("模型说不是，hints 跟着变假", hints2["defer_sale_intent"] is False)
@@ -160,7 +161,7 @@ def test_apply_overlay() -> None:
     check("路由不再被拉去 defer_sale", agent == "sales_agent", agent)
 
     # 管理类动作不归模型判：它们有自己的词表和自己的闸门。
-    hints3 = intent_plan.hints("把转换器那条计划撤了", [])
+    hints3 = intent_rules.hints("把转换器那条计划撤了", [])
     check("前提：撤计划由词法判", hints3["plan_action_intent"] == "cancel")
     D.apply(hints3, D.DeferReading(is_defer=False, source="model"))
     check("模型说不是延后，撤计划这个动作不受影响",
@@ -176,9 +177,9 @@ def test_wiring() -> None:
 
     from app.config import settings
     from app.services.agents import graph as graph_mod
-    from app.services.agents.lc_llm import CALL_SITE_DEFER_INTENT
+    from app.services.llm.langchain_client import CALL_SITE_DEFER_INTENT
 
-    src = Path(graph_mod.__file__).read_text(encoding="utf-8")
+    src = _bootstrap.module_source(graph_mod)
     i_classify = src.find("defer_intent.classify")
     i_route = src.find("decision = router_mod.route(")
     check("route_node 里调了调用点 H", i_classify > 0)
@@ -187,7 +188,7 @@ def test_wiring() -> None:
     check("模型日期传给了计划 agent", "fallback_date=str((state.get(\"hints\")" in src)
     check("确定性节点也用得上它", 'hints.get("defer_target_date")' in src)
 
-    from app.services.plan_agent import orchestrator as plan_mod
+    from app.services.agents.planning import orchestrator as plan_mod
 
     psrc = Path(plan_mod.__file__).read_text(encoding="utf-8")
     check("run_plan_agent 收得下这个日期", "fallback_date: str = \"\"" in psrc)
@@ -212,7 +213,7 @@ def test_wiring() -> None:
 # ============================================================
 def test_lexical_fallback_holes() -> None:
     section("词法兜底：截图里那句话现在也认得（兜底路径）")
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
 
     today = date(2026, 9, 23)
     positives = [
@@ -223,7 +224,7 @@ def test_lexical_fallback_holes() -> None:
         "这台显示器我打算12月放假前再卖",
     ]
     for msg in positives:
-        check(f"「{msg[:18]}」认得出是延后", intent_plan.defer_sale_intent(msg), msg)
+        check(f"「{msg[:18]}」认得出是延后", intent_rules.defer_sale_intent(msg), msg)
 
     negatives = [
         "上个月挂出来的那件怎么样了",
@@ -232,13 +233,13 @@ def test_lexical_fallback_holes() -> None:
         "台灯先下架吧",
     ]
     for msg in negatives:
-        check(f"「{msg[:18]}」不是延后", not intent_plan.defer_sale_intent(msg), msg)
+        check(f"「{msg[:18]}」不是延后", not intent_rules.defer_sale_intent(msg), msg)
 
-    parsed, basis = intent_plan.parse_target_date("我想在2个月后出售这支笔", today)
+    parsed, basis = intent_rules.parse_target_date("我想在2个月后出售这支笔", today)
     check("「2个月后」换算得出日期", parsed == today + timedelta(days=60), f"{parsed}/{basis}")
-    parsed, _ = intent_plan.parse_target_date("三周后出售", today)
+    parsed, _ = intent_rules.parse_target_date("三周后出售", today)
     check("「三周后」换算得出日期", parsed == today + timedelta(days=21), str(parsed))
-    parsed, basis = intent_plan.parse_target_date("等学期末再挂", today)
+    parsed, basis = intent_rules.parse_target_date("等学期末再挂", today)
     check("学期锚点没被新规则抢走", basis == "semester", f"{parsed}/{basis}")
 
 
@@ -264,7 +265,7 @@ LIVE_CASES: list[tuple[str, bool, bool]] = [
 def test_live() -> None:
     section("真调用：模型判得对不对（--live）")
     from app.services.agents import defer_intent as D
-    from app.services.agents.lc_llm import llm_configured
+    from app.services.llm.langchain_client import llm_configured
 
     ok, why = llm_configured()
     if not ok:
@@ -316,7 +317,7 @@ def test_live_route() -> None:
             "turns": [],
             "photo_path": "uploads/pen.jpg",
         }
-        out = graph_mod.route_node(state, {"configurable": {"db": db}})
+        out = graph_mod.nodes.route_node(state, {"configurable": {"db": db}})
         got = (
             f"route={out.get('route')} hold={out.get('hold_after_publish')} "
             f"defer={(out.get('hints') or {}).get('defer_sale_intent')} "
@@ -331,7 +332,7 @@ def test_live_route() -> None:
 
         # 对照组：同一张照片、同一件东西，没有那句时间——就该是一次普通上架。
         state["message"] = "卖这支笔，成色良好，笔身是塑料的"
-        out = graph_mod.route_node(state, {"configurable": {"db": db}})
+        out = graph_mod.nodes.route_node(state, {"configurable": {"db": db}})
         got = f"route={out.get('route')} hold={out.get('hold_after_publish')}"
         check("对照组：没有时间说法就是普通上架",
               out.get("route") == "publishing_agent" and not out.get("hold_after_publish"), got)

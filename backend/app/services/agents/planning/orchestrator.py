@@ -1,7 +1,7 @@
 """出售计划 agent —— 调用点 G。
 
 形态和销售顾问（调用点 C）一样：一个模型实例 + 一组注册过的工具 + 一个有上限的
-工具循环。骨架是照着 `seller_advisor/orchestrator.py` 来的，因为那套东西的安全性
+工具循环。骨架是照着 `sales/orchestrator.py` 来的，因为那套东西的安全性
 质已经被验过一遍，没有理由重新发明：
 
 * 模型只能调 `TOOL_REGISTRY` 里的工具，参数先过 Pydantic 再执行；
@@ -36,15 +36,15 @@ from typing import Any, Callable
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from ...config import settings
-from ...models import ItemStatus
-from ...repositories import ItemRepository
-from ..agents import intent_plan
-from ..agents.lc_llm import get_advisor_client as get_llm_client
-from ..llm import extract_json
-from ..prompts import load_prompt
-from ..seller_advisor.schemas import AdvisorChatOut, AdvisorChatTurn
-from ..seller_advisor.tools import ToolError
+from ....config import settings
+from ....models import ItemStatus
+from ....repositories import ItemRepository
+from ...nlp import intent_rules
+from ...llm.langchain_client import get_advisor_client as get_llm_client
+from ...llm.client import extract_json
+from ...prompts import load_prompt
+from ..sales.schemas import AdvisorChatOut, AdvisorChatTurn
+from ..sales.tools import ToolError
 from . import tools as tool_impl
 from .schemas import (
     CancelSalePlanInput,
@@ -317,7 +317,7 @@ def _parsed_date_block(message: str, fallback_date: str = "") -> str:
 
     两个来源都没有时这一块不出现，模型就知道该问卖家。
     """
-    parsed, basis = intent_plan.parse_target_date(message)
+    parsed, basis = intent_rules.parse_target_date(message)
     if parsed is None:
         return _fallback_date_block(fallback_date)
     return (
@@ -363,7 +363,7 @@ def _switch_block(master_enabled: bool, total_active: int) -> str:
 def _required_action_block(action: str) -> str:
     """服务端认定这一轮必须动手的事。
 
-    由 `intent_plan` 的词法判定得出，是**提示**不是命令——但如果模型一个工具都没调
+    由 `intent_rules` 的词法判定得出，是**提示**不是命令——但如果模型一个工具都没调
     就收尾，下面那条守卫会让它重来一次。理由很直接：卖家说「把那条撤了」，收到一句
     「好的，已经撤掉了」而数据库没动，是这个功能最坏的一种失败。
     """

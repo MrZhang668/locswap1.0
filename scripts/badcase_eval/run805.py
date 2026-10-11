@@ -39,7 +39,8 @@ from sqlalchemy import select  # noqa: E402
 import dataset805  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.models import TokenUsageLog, User  # noqa: E402
-from app.services.agents import run_turn, sessions  # noqa: E402
+from app.services.agents import sessions  # noqa: E402
+from app.services.agents.graph import run_turn  # noqa: E402
 
 
 def seller_ids(rows: list[dict]) -> dict[str, int]:

@@ -96,7 +96,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8010/api/health || exit 1
 
 # One worker on purpose. Two in-process caches are not shared between
-# processes — the advisor's candidate-card mapping (services/seller_advisor/
+# processes — the advisor's candidate-card mapping (services/agents/sales/
 # tools.py) and the LangGraph thread state — so a second worker would answer
 # "that candidate list has expired" at random. Scaling past one means moving
 # those to the database first.

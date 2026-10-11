@@ -95,10 +95,15 @@ LocSwap 是一个面向校园的二手交易平台，场景设定在约翰霍普
 │           ├── lifecycle.py     # 商品状态机（在售 / 已预留 / 暂停 / 售出）
 │           ├── sale_plans.py    # 出售计划与每周需求监测
 │           ├── scheduler.py     # 后台循环：过期清理、出售计划检查
-│           ├── agents/          # LangGraph 图：意图路由、确认中断、会话
-│           ├── seller_advisor/  # 销售顾问的工具与编排
-│           ├── publishing/      # 发布流程：规则库、合规审核、草稿抽取
-│           └── plan_agent/      # 出售计划 Agent
+│           ├── llm/             # 模型访问：client（官方 SDK / OpenAI 兼容接口）、langchain_client（Agent 用的模型与 token 计量）
+│           ├── nlp/             # 确定性的语言规则：意图词法、日期换算（不调模型）
+│           └── agents/          # Agent 层
+│               ├── graph/       # LangGraph 图：state（状态）/ nodes（节点）/ routing（拓扑）/ runtime（编译、存档、run_turn）
+│               ├── router.py    # 意图路由（调用点 D）；defer_intent.py「以后再卖」识别（H）
+│               ├── proposals.py # 两类需确认的写操作；handoff.py 任务挂起与接回；sessions.py 对话线程
+│               ├── sales/       # 销售顾问：工具与工具调用循环（C）
+│               ├── publishing/  # 发布流程：规则库、合规审核、草稿抽取、批准上架（E、F）
+│               └── planning/    # 出售计划 Agent（G）
 ├── frontend/
 │   ├── vite.config.js           # 开发代理：/api、/static → 后端 8010；/tiles → OSM
 │   └── src/

@@ -65,32 +65,32 @@ def section(title: str) -> None:
 # 归因一 — 非法槽位值被丢弃，而不是被「宽容纠错」
 # ============================================================
 def test_illegal_price_scan() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
 
     section("归因一 原文扫描：负价格在模型碰它之前就被看见")
 
     for item in ("记忆棉枕头", "木吉他", "小提琴", "电饭煲"):
-        found = intent_plan.scan_illegal_prices(f"{item}降到-50怎么样")
+        found = intent_rules.scan_illegal_prices(f"{item}降到-50怎么样")
         ok = len(found) == 1 and found[0]["raw"] == "-50" and found[0]["reason"] == "negative"
         check(f"「{item}降到-50怎么样」扫出非法价格", ok, str(found))
 
     check("空格分隔的负号也认",
-          intent_plan.scan_illegal_prices("小提琴降到 -50 怎么样")[:1] != [])
-    check("中文「负」也认", intent_plan.scan_illegal_prices("这个降价负100") != [])
+          intent_rules.scan_illegal_prices("小提琴降到 -50 怎么样")[:1] != [])
+    check("中文「负」也认", intent_rules.scan_illegal_prices("这个降价负100") != [])
     check("「标价改成0」是非法价格",
-          [f["reason"] for f in intent_plan.scan_illegal_prices("标价改成0")] == ["zero"])
+          [f["reason"] for f in intent_rules.scan_illegal_prices("标价改成0")] == ["zero"])
     check("超出上限的价格被判非法",
-          [f["reason"] for f in intent_plan.scan_illegal_prices("价格调到1000000")] == ["too_large"])
+          [f["reason"] for f in intent_rules.scan_illegal_prices("价格调到1000000")] == ["too_large"])
 
     # 误伤一次的代价是凭空多问卖家一句，所以这几条比上面几条更重要。
     for msg in ("降到50怎么样", "降到0.5", "降到99.9", "50-80都可以接受",
                 "降到50-80区间", "我2026-09-20上架的那件", "最近一周有多少人在找",
                 "把价格降一点", "帮我卖微波炉"):
-        check(f"「{msg}」不该被判非法", intent_plan.scan_illegal_prices(msg) == [],
-              str(intent_plan.scan_illegal_prices(msg)))
+        check(f"「{msg}」不该被判非法", intent_rules.scan_illegal_prices(msg) == [],
+              str(intent_rules.scan_illegal_prices(msg)))
 
     check("hints 带着这份证据",
-          intent_plan.hints("记忆棉枕头降到-50怎么样", [])["illegal_price"] != [])
+          intent_rules.hints("记忆棉枕头降到-50怎么样", [])["illegal_price"] != [])
 
 
 def test_illegal_price_dropped_not_fixed() -> None:
@@ -118,7 +118,7 @@ def test_illegal_price_dropped_not_fixed() -> None:
 
 
 def test_slot_check_block() -> None:
-    from app.services.seller_advisor import orchestrator as orch
+    from app.services.agents.sales import orchestrator as orch
 
     section("归因一 交给专家的那段话：事实 + 禁令 + 一句必须问出口的话")
 
@@ -155,21 +155,21 @@ def test_prompts_carry_the_rules() -> None:
 # 归因二 — 状态读取类工具进入必调清单
 # ============================================================
 def test_state_query_detection() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
 
     section("归因二 状态类提问的识别")
 
     for msg in ("我一共挂了几件东西", "我在售的商品有哪些", "我还有哪几件挂着",
                 "我目前一共挂了多少件", "我上架了哪些东西", "列一下我的在售清单",
                 "我一共有几件在售商品", "我总共有多少件商品在卖", "我这边还有什么没卖掉的"):
-        check(f"「{msg}」是状态查询", intent_plan.state_query(msg))
+        check(f"「{msg}」是状态查询", intent_rules.state_query(msg))
 
     # 这些都带计数词和第一人称，但问的是市场不是库存。把它们吃进来，卖家会被
     # 回一份商品清单而不是买家名单。
     for msg in ("帮我给小白板找几个潜在客户", "公路车给我找几个人", "有几个人在找破壁机",
                 "有几个买家在等手账本？", "冲锋衣有多少人在找", "帮我看看微波炉的价格",
                 "这些买家都什么情况"):
-        check(f"「{msg}」不是状态查询", not intent_plan.state_query(msg))
+        check(f"「{msg}」不是状态查询", not intent_rules.state_query(msg))
 
 
 def test_state_query_routing() -> None:
@@ -198,15 +198,16 @@ def test_state_query_routing() -> None:
 
 
 def test_buyer_count_routing() -> None:
-    from app.services.agents import intent_plan, router as R
+    from app.services.nlp import intent_rules
+    from app.services.agents import router as R
 
     section("4.2.5 买家数量：问的是名单长度，不是搜索人数")
 
     for msg in ("有几个买家在等手账本？", "有几个买家在等Switch游戏机？", "多少买家在等这个"):
-        check(f"「{msg}」是买家数量提问", intent_plan.buyer_count_question(msg))
+        check(f"「{msg}」是买家数量提问", intent_rules.buyer_count_question(msg))
     for msg in ("把这几个买家的手机号给我", "这几个买家靠谱吗", "有几个人在找破壁机",
                 "第1个买家的预算大概多少", "帮我找小提琴的买家"):
-        check(f"「{msg}」不是买家数量提问", not intent_plan.buyer_count_question(msg))
+        check(f"「{msg}」不是买家数量提问", not intent_rules.buyer_count_question(msg))
 
     hints = {"buyer_count_question": True}
     scen, required = R.apply_buyer_count("sales_agent", "demand", hints)
@@ -229,13 +230,13 @@ def test_graph_wiring() -> None:
 
     section("归因一/二 图接线：两条覆盖在 route_node 里，两个字段传得到专家")
 
-    src = inspect.getsource(G.route_node)
+    src = inspect.getsource(G.nodes.route_node)
     check("route_node 调用 apply_state_query", "apply_state_query" in src)
     check("route_node 调用 apply_buyer_count", "apply_buyer_count" in src)
     check("必调清单去重后写回 state", "dict.fromkeys(required_tools)" in src)
     check("非法槽位证据写回 state", '"slot_warnings": slot_warnings' in src)
 
-    sales = inspect.getsource(G.sales_node)
+    sales = inspect.getsource(G.nodes.sales_node)
     check("sales_node 把 slot_warnings 交给专家", "slot_warnings=" in sales)
     check("sales_node 把 required_tools 交给专家", "required_tools=" in sales)
 
@@ -244,7 +245,7 @@ def test_graph_wiring() -> None:
           and "required_tools" in G.AdvisorState.__annotations__)
 
     # 跨轮持久化的 state 必须每轮重置，否则上一轮的非法价格会在这一轮再问一次。
-    src_all = inspect.getsource(G)
+    src_all = _bootstrap.module_source(G)
     check("降级分支重置了这两个字段",
           src_all.count('"slot_warnings": []') >= 2, "至少 degraded 和 handoff 两处")
 
@@ -301,7 +302,7 @@ def _text(t: str):
 
 def _run(seller_id: int, message: str, script: list, **kw):
     from app.db import SessionLocal
-    from app.services.seller_advisor import orchestrator as orch
+    from app.services.agents.sales import orchestrator as orch
 
     client = _FakeClient(script)
     orig = orch.get_llm_client
@@ -336,7 +337,7 @@ def test_prefetch_end_to_end() -> None:
 
     # 12 件 > INLINE_ITEMS_MAX(10)：这正是 EXP0308 答出 18 件的那个形状——
     # 便利视图被截断，数行数得到的是"显示了几件"。
-    from app.services.seller_advisor.orchestrator import INLINE_ITEMS_MAX
+    from app.services.agents.sales.orchestrator import INLINE_ITEMS_MAX
     check("便利视图确实被截断了（否则这条断言没在测东西）",
           INLINE_ITEMS_MAX < 12 and "共 12 件" in sent, f"INLINE_ITEMS_MAX={INLINE_ITEMS_MAX}")
 
@@ -387,7 +388,8 @@ def test_slot_check_reaches_the_model() -> None:
 # --live-router：真实路由调用
 # ============================================================
 def test_router_live() -> None:
-    from app.services.agents import intent_plan, router as R
+    from app.services.nlp import intent_rules
+    from app.services.agents import router as R
 
     section("--live-router：真实路由调用（花钱）")
 
@@ -395,7 +397,7 @@ def test_router_live() -> None:
                 {"item_id": 2, "name": "白色手账本", "price": 12.0, "status": "selling"}]
 
     msg = "记忆棉枕头降到-50怎么样"
-    hints = intent_plan.hints(msg, listings)
+    hints = intent_rules.hints(msg, listings)
     res = R.route(message=msg, history=[], has_active_items=True, listings=listings,
                   hints=hints, last_context={})
     # 这一条要先于所有槽位断言。`route()` 永不抛异常——鉴权失败、解析失败都退成
@@ -409,7 +411,7 @@ def test_router_live() -> None:
         check("真实调用：带回了回问依据", bool(res.slot_warnings), str(res.slot_warnings))
 
     msg = "我一共挂了几件东西"
-    hints = intent_plan.hints(msg, listings)
+    hints = intent_rules.hints(msg, listings)
     res = R.route(message=msg, history=[], has_active_items=True, listings=listings,
                   hints=hints, last_context={})
     if check("真实调用：状态查询那一轮路由器也应答了",

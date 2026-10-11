@@ -46,8 +46,8 @@ from sqlalchemy import select  # noqa: E402
 
 from app.db import SessionLocal  # noqa: E402
 from app.models import Item, StandingWant, User  # noqa: E402
-from app.services.seller_advisor import tools as T  # noqa: E402
-from app.services.seller_advisor.schemas import FindPotentialBuyersInput  # noqa: E402
+from app.services.agents.sales import tools as T  # noqa: E402
+from app.services.agents.sales.schemas import FindPotentialBuyersInput  # noqa: E402
 from app.services.wants import create_explicit_want  # noqa: E402
 
 SELLER_EMAIL = "seller056@campus.edu"

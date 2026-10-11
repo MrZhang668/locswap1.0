@@ -96,8 +96,8 @@ def test_fixture_seller_assignment() -> None:
 def test_empty_results_are_modelled() -> None:
     from app.db import Base, SessionLocal, engine
     from app.models import Item
-    from app.services.seller_advisor import tools as T
-    from app.services.seller_advisor.schemas import (
+    from app.services.agents.sales import tools as T
+    from app.services.agents.sales.schemas import (
         AnalyzeDemandInput,
         AnalyzeSoldPricesInput,
         FindPotentialBuyersInput,
@@ -181,8 +181,8 @@ def test_empty_result_block_reaches_the_model() -> None:
 # 归因二 — 图表载体与对比模板
 # ============================================================
 def test_price_distribution_contract() -> None:
-    from app.services.seller_advisor import tools as T
-    from app.services.seller_advisor.schemas import SoldPriceStats
+    from app.services.agents.sales import tools as T
+    from app.services.agents.sales.schemas import SoldPriceStats
 
     section("归因二 定价分析有了和需求分析同规格的图表结构")
 
@@ -212,8 +212,8 @@ def test_price_distribution_contract() -> None:
 
 
 def test_comparison_table() -> None:
-    from app.services.seller_advisor import orchestrator as orch
-    from app.services.seller_advisor.schemas import (
+    from app.services.agents.sales import orchestrator as orch
+    from app.services.agents.sales.schemas import (
         NO_DATA_CELL,
         AnalyzeDemandOutput,
         AnalyzeSoldPricesOutput,
@@ -307,7 +307,7 @@ def test_chart_end_to_end() -> None:
 # 5.3.3 / 5.3.4 — 形式要求
 # ============================================================
 def test_output_contract_detection() -> None:
-    from app.services.agents import intent_plan as ip
+    from app.services.nlp import intent_rules as ip
 
     section("5.3.3/5.3.4 形式要求从卖家原话里读出来")
 
@@ -329,7 +329,7 @@ def test_output_contract_detection() -> None:
 
 
 def test_output_contract_enforced() -> None:
-    from app.services.seller_advisor import orchestrator as orch
+    from app.services.agents.sales import orchestrator as orch
 
     section("5.3.3/5.3.4 形式要求在服务端被复核，不只写在提示词里")
 
@@ -375,11 +375,11 @@ def test_graph_wiring() -> None:
 
     section("形式要求在 graph 里被接住并逐轮重置")
 
-    src = Path(graph.__file__).read_text(encoding="utf-8")
+    src = _bootstrap.module_source(graph)
     check("AdvisorState 有 output_contract 字段", "output_contract: dict" in src)
     check("sales_node 把它传给了专家", "output_contract=dict(state.get" in src)
     check("降级分支重置了它", '"output_contract": {},' in src)
-    check("接力分支从卖家原话里重读", "intent_plan.output_contract(" in src)
+    check("接力分支从卖家原话里重读", "intent_rules.output_contract(" in src)
     # 状态跨轮持续，漏掉重置就会把上一轮的「简单说」带进这一轮。
     check("正常分支从 hints 取值",
           '"output_contract": hints.get("output_contract")' in src)
@@ -543,7 +543,7 @@ def _tool_use(name: str, params: dict):
 
 def _run(seller_id: int, message: str, script: list, **kw):
     from app.db import SessionLocal
-    from app.services.seller_advisor import orchestrator as orch
+    from app.services.agents.sales import orchestrator as orch
 
     client = _FakeClient(script)
     orig = orch.get_llm_client

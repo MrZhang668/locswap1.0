@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     #: 只有一个布尔值和两段引文，用主模型是纯浪费。
     llm_max_tokens_defer_intent: int = 300
     llm_temperature_defer_intent: float = 0.0
-    #: 关掉这一层，判断退回 `intent_plan` 的词法规则。留这个开关是因为这一层是
+    #: 关掉这一层，判断退回 `intent_rules` 的词法规则。留这个开关是因为这一层是
     #: 每轮一次的额外调用：配额紧张时它应该可以被关掉，而不是被删掉。
     defer_intent_model_enabled: bool = True
     #: how many (user, assistant) turns a server-side thread keeps in context

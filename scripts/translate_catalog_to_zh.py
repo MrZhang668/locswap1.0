@@ -33,7 +33,7 @@ from pathlib import Path
 import _bootstrap  # noqa: F401  path setup
 
 from app.config import LOCATION_BY_NAME, PROJECT_ROOT, settings  # noqa: E402
-from app.services.llm import get_llm_client  # noqa: E402
+from app.services.llm.client import get_llm_client  # noqa: E402
 from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 
 CACHE_PATH = PROJECT_ROOT / "data" / "_zh_catalog_cache.json"

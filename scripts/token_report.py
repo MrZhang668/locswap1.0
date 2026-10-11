@@ -14,7 +14,7 @@ import _bootstrap  # noqa: F401  # isort:skip
 from app.db import SessionLocal, init_db
 from app.models import TokenUsageLog
 from app.repositories import TokenUsageRepository
-from app.services.llm import estimate_cost_usd
+from app.services.llm.client import estimate_cost_usd
 
 
 def _hit_rate(input_tokens: int, cache_read: int, cache_write: int) -> str:

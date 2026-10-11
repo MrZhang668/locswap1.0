@@ -19,9 +19,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ...config import CATEGORY_DICT, CONDITION_DICT
-from ..images import check_upload_path
-from ..text import scrub_pii
+from ....config import CATEGORY_DICT, CONDITION_DICT
+from ...images import check_upload_path
+from ...text import scrub_pii
 
 CATEGORIES: tuple[str, ...] = tuple(CATEGORY_DICT.keys())
 

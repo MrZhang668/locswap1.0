@@ -6,7 +6,7 @@ from ..config import CAMPUS_LOCATIONS, CATEGORY_DICT, settings
 from ..deps import get_index
 from ..schemas import LocationOut, MetaConfigOut
 from ..services.item_index import ItemIndexService
-from ..services.llm import get_llm_client
+from ..services.llm.client import get_llm_client
 
 router = APIRouter(prefix="/api/meta", tags=["meta"])
 

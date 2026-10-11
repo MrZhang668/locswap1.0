@@ -25,18 +25,19 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user, get_index
 from ..models import User
-from ..services.agents import run_turn, sessions
-from ..services.agents.lc_llm import read_turn_meter
-from ..services.item_index import ItemIndexService
-from ..services.publishing.approve import approve_listing
-from ..services.publishing.schemas import PublishApproveIn, PublishApproveOut
-from ..services.seller_advisor import (
+from ..services.agents import sessions
+from ..services.agents.graph import THREAD_STATE, run_turn
+from ..services.agents.publishing.approve import approve_listing
+from ..services.agents.publishing.schemas import PublishApproveIn, PublishApproveOut
+from ..services.agents.sales import (
     AdvisorChatIn,
     AdvisorChatOut,
     AdvisorThreadRow,
     ThreadRenameIn,
     ThreadTranscript,
 )
+from ..services.item_index import ItemIndexService
+from ..services.llm.langchain_client import read_turn_meter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/seller/advisor", tags=["seller-advisor"])
@@ -178,4 +179,4 @@ def publish_approve(
     model last saw it — so the content check runs again in `approve_listing`,
     on what was actually submitted.
     """
-    return approve_listing(db, index, user, payload)
+    return approve_listing(db, index, user, payload, THREAD_STATE)

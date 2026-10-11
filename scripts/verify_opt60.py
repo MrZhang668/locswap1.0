@@ -134,7 +134,7 @@ def test_session_memory_is_already_durable() -> None:
     from app.config import settings
     from app.services.agents import graph, sessions
 
-    src = Path(graph.__file__).read_text(encoding="utf-8")
+    src = _bootstrap.module_source(graph)
     check("checkpointer 落盘而不是进程内", "SqliteSaver" in src and "advisor_threads.sqlite" in src)
     check("对话原文存在 state 里跨轮持有", "turns: list[dict]" in src)
     check("每一轮都把最近若干轮回灌给路由器和专家", "history=_recent(state.get" in src)
@@ -155,7 +155,7 @@ def test_session_memory_is_already_durable() -> None:
 def test_item_referent_lexicon() -> None:
     section("归因一 a 词法：商品指代 / 结果指代 / 多实体分得开")
 
-    from app.services.agents import intent_plan as ip
+    from app.services.nlp import intent_rules as ip
 
     # 商品指代
     for text, want in (
@@ -195,7 +195,7 @@ def test_item_referent_lexicon() -> None:
 def test_reference_gate() -> None:
     section("归因一 a 闸门：候选数 0 / 1 / >1 各走各的路")
 
-    from app.services.agents import intent_plan as ip
+    from app.services.nlp import intent_rules as ip
     from app.services.agents import router as R
 
     def gate(msg, discussed, listings=None, last_ctx=None, photo=False, agent="sales_agent"):
@@ -258,7 +258,7 @@ def test_reference_gate() -> None:
 def test_multi_entity() -> None:
     section("归因一 b：「两个都要」解析成实体列表")
 
-    from app.services.agents import intent_plan as ip
+    from app.services.nlp import intent_rules as ip
     from app.services.agents import router as R
 
     two = [{"item_id": 1, "name": "羽绒服"}, {"item_id": 2, "name": "冲锋衣"}]
@@ -295,7 +295,7 @@ def test_forced_default_announces_itself() -> None:
     section("归因一 c：被逼出默认方案时必须说「我先按 X，如果是 Y 告诉我」")
 
     from app.services.agents import graph
-    from app.services.seller_advisor import orchestrator as orch
+    from app.services.agents.sales import orchestrator as orch
 
     note = orch._ambiguity_block(
         {"kind": "ambiguous", "candidates": ["电风扇", "床垫"]}, ["电风扇"])
@@ -311,7 +311,7 @@ def test_forced_default_announces_itself() -> None:
     check("候选唯一时不生成任何要求",
           not orch._ambiguity_block({"kind": "ambiguous", "candidates": ["电风扇"]}, []))
 
-    src = Path(graph.__file__).read_text(encoding="utf-8")
+    src = _bootstrap.module_source(graph)
     check("收敛成默认方案时补上了候选里的第一件",
           'if cands and not slots.get("item_ref")' in src)
     check("ambiguity 随状态传给专家", "ambiguity=dict(state.get" in src)
@@ -345,7 +345,7 @@ def test_result_stack() -> None:
                       {"card_id": "c2", "demand_summary": "找二手厨电"}],
         }],
     }
-    stack = graph._push_results(state, payload)
+    stack = graph.nodes._push_results(state, payload)
     kinds = [e["type"] for e in stack]
     check("三类结论都入栈", set(kinds) == {"price", "demand", "buyers"}, str(kinds))
     check("每条都有 id", all(e.get("id") for e in stack), str(stack[:1]))
@@ -364,7 +364,7 @@ def test_result_stack() -> None:
           all(set(o) <= {"n", "card_id", "demand"} for o in buyers["value"]["ordinals"]))
 
     # 空结果不入栈：一个「查不到」不是可以被「这个价」指向的结论。
-    empty_stack = graph._push_results(
+    empty_stack = graph.nodes._push_results(
         {"turns": []},
         {"pricing_analysis": [{"item_id": 1, "item_name": "x", "empty": {"kind": "no_sold_evidence"},
                                "stats": {"sample_size": 0}}]})
@@ -373,15 +373,15 @@ def test_result_stack() -> None:
     # 栈有上限，最近的在前
     grown = dict(state)
     grown["result_stack"] = stack
-    again = graph._push_results(grown, payload)
-    check("栈不超过上限", len(again) <= graph.MAX_RESULTS, str(len(again)))
+    again = graph.nodes._push_results(grown, payload)
+    check("栈不超过上限", len(again) <= graph.nodes.MAX_RESULTS, str(len(again)))
     check("最近的在最前", again[0]["turn"] >= again[-1]["turn"])
 
 
 def test_result_stack_reaches_the_model() -> None:
     section("归因二：结果栈作为一个块进到提示词里，并写明了取值规则")
 
-    from app.services.seller_advisor import orchestrator as orch
+    from app.services.agents.sales import orchestrator as orch
 
     block = orch._result_stack_block([
         {"id": "r1-1", "type": "price", "item_id": 7, "item_name": "微波炉",
@@ -411,7 +411,7 @@ def test_history_window_declared() -> None:
     section("6.3.2：历史被截断时，专家必须知道")
 
     from app.services.agents import graph
-    from app.services.seller_advisor import orchestrator as orch
+    from app.services.agents.sales import orchestrator as orch
 
     check("没截断时不生成块", orch._history_window_block((6, 6)) == "")
     check("轮数更少时也不生成", orch._history_window_block((6, 3)) == "")
@@ -423,7 +423,7 @@ def test_history_window_declared() -> None:
     check("给了唯一正确的兜底答法", "请他再说一遍" in block, block[:400])
     check("禁止编数字", "不许推测" in block and "不许拿现在的标价" in block, block[:500])
 
-    src = Path(graph.__file__).read_text(encoding="utf-8")
+    src = _bootstrap.module_source(graph)
     check("graph 把窗口算出来传下去", "history_window=(len(history) // 2" in src)
 
 
@@ -435,8 +435,8 @@ def test_sold_items_excluded() -> None:
 
     from app.db import Base, SessionLocal, engine
     from app.models import Item, ItemStatus, User, utcnow
-    from app.services.seller_advisor import tools as T
-    from app.services.seller_advisor.schemas import AnalyzeDemandInput, ListMyItemsInput
+    from app.services.agents.sales import tools as T
+    from app.services.agents.sales.schemas import AnalyzeDemandInput, ListMyItemsInput
 
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
@@ -495,8 +495,8 @@ def test_end_to_end_three_turns() -> None:
     from app.models import Item, ItemStatus, User
     from app.services.agents import graph
     from app.services.agents import router as R
-    from app.services.seller_advisor import orchestrator as orch
-    from app.services.seller_advisor.schemas import AdvisorChatOut
+    from app.services.agents.sales import orchestrator as orch
+    from app.services.agents.sales.schemas import AdvisorChatOut
 
     section("端到端：谈过两件之后，「回到前面那个」被拦下来")
 
@@ -547,10 +547,10 @@ def test_end_to_end_three_turns() -> None:
         return AdvisorChatOut(ok=True, reply=f"（{hit or '未绑定'} 的需求分析）",
                               demand_analysis=analyses)
 
-    orig_route, orig_llm = R.route, graph.llm_configured
-    orig_advisor = sys.modules["app.services.seller_advisor.orchestrator"].run_advisor
+    orig_route, orig_llm = R.route, graph.nodes.llm_configured
+    orig_advisor = sys.modules["app.services.agents.sales.orchestrator"].run_advisor
     R.route = fake_route
-    graph.llm_configured = lambda: (True, "")
+    graph.nodes.llm_configured = lambda: (True, "")
     orch.run_advisor = fake_advisor
     graph.reset_graph()
     try:
@@ -604,7 +604,7 @@ def test_end_to_end_three_turns() -> None:
                   str(s5.get("route")))
     finally:
         R.route = orig_route
-        graph.llm_configured = orig_llm
+        graph.nodes.llm_configured = orig_llm
         orch.run_advisor = orig_advisor
         graph.reset_graph()
 
@@ -617,7 +617,7 @@ def test_graph_wiring() -> None:
 
     from app.services.agents import graph
 
-    src = Path(graph.__file__).read_text(encoding="utf-8")
+    src = _bootstrap.module_source(graph)
     check("AdvisorState 有 discussed_items", "discussed_items: list[dict]" in src)
     check("AdvisorState 有 result_stack", "result_stack: list[dict]" in src)
     check("AdvisorState 有 ambiguity", "ambiguity: dict" in src)

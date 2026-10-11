@@ -22,11 +22,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..images import check_upload_path
+from ...images import check_upload_path
 from ..publishing.schemas import PublishDraftView, PublishFinding
 #: Re-exported: the tool layer imports it from here, and it is shared with the
 #: publishing flow, so it lives in services/text.py now.
-from ..text import scrub_pii
+from ...text import scrub_pii
 
 SortBy = Literal["best_match", "nearest", "highest_budget", "newest"]
 

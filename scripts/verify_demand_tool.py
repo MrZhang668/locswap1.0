@@ -31,8 +31,8 @@ from pydantic import ValidationError  # noqa: E402
 
 from app.db import SessionLocal  # noqa: E402
 from app.models import DemandEvent, DemandEventKind, Item, ItemStatus, utcnow  # noqa: E402
-from app.services.seller_advisor import tools as T  # noqa: E402
-from app.services.seller_advisor.schemas import (  # noqa: E402
+from app.services.agents.sales import tools as T  # noqa: E402
+from app.services.agents.sales.schemas import (  # noqa: E402
     MIN_BUYERS_TO_SHOW_PHRASE,
     AnalyzeDemandInput,
     AnalyzeDemandOutput,

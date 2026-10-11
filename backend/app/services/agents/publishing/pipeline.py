@@ -27,12 +27,12 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from ...config import settings
-from ...models import ListingRule, RuleSeverity
-from ..agents.lc_llm import build_chat_model, record_usage
-from ..images import to_base64_source
-from ..llm import extract_json
-from ..prompts import load_prompt
+from ....config import settings
+from ....models import ListingRule, RuleSeverity
+from ...llm.langchain_client import build_chat_model, record_usage
+from ...images import to_base64_source
+from ...llm.client import extract_json
+from ...prompts import load_prompt
 from . import rules as rules_mod
 from .schemas import ComplianceVerdict, ListingDraft, PublishFinding, RuleFinding
 
@@ -81,7 +81,7 @@ def _invoke_json(
     """One multimodal call whose answer must satisfy `schema`.
 
     Retries once with the validation error fed back — the same contract
-    services/llm.py uses for its JSON call sites, so a malformed answer costs
+    services/llm/client.py uses for its JSON call sites, so a malformed answer costs
     one cheap retry rather than a failed submission.
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage

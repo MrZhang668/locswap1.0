@@ -1,18 +1,18 @@
 """LangChain-backed model access for the agent stack (call sites C and D).
 
-Why a second LLM layer alongside `services/llm.py`:
+Why a second LLM layer alongside `llm/client.py`:
 * the agent stack is built on LangGraph, and staying inside LangChain's message
   and tool abstractions is what lets a node be swapped, traced, or wrapped
   without hand-rolling provider plumbing again;
 * the older call sites (A listing generation, B query understanding) are on the
-  hot paths of listing and search. They keep using `services/llm.py` — there is
+  hot paths of listing and search. They keep using `llm/client.py` — there is
   no upside to churning them, and a regression there is far more expensive than
   one here.
 
 Two things this module is careful about:
 
 **Shape.** `LangChainAdvisorClient.create_with_tools` returns the *same*
-Anthropic-shaped object `services/llm.py` returns (content blocks + usage), so
+Anthropic-shaped object `llm/client.py` returns (content blocks + usage), so
 the seller-advisor orchestrator — with its Pydantic validation, ownership
 checks, round caps and result caching — is untouched by the swap. The
 conversion is explicit in both directions rather than delegated, because a
@@ -42,11 +42,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from ...config import settings
-from ..llm import _log_usage  # single writer for token_usage_log
+from .client import _log_usage  # single writer for token_usage_log
 
 logger = logging.getLogger(__name__)
 
-#: Call sites owned by the agent stack. A.* and B.* stay in services/llm.py.
+#: Call sites owned by the agent stack. A.* and B.* stay in llm/client.py.
 CALL_SITE_ROUTER = "D.orchestrator_router"
 CALL_SITE_DEFER_INTENT = "H.defer_intent"
 
@@ -305,7 +305,7 @@ def from_lc_message(message: Any) -> SimpleNamespace:
 
 
 # ============================================================
-# Advisor client (drop-in for services.llm.LLMClient.create_with_tools)
+# Advisor client (drop-in for llm.client.LLMClient.create_with_tools)
 # ============================================================
 class LangChainAdvisorClient:
     """What the seller-advisor orchestrator talks to, now backed by LangChain.

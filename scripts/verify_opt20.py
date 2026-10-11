@@ -43,27 +43,28 @@ def section(title: str) -> None:
 # 归因一 — agent 交接时的会话级任务状态
 # ============================================================
 def test_handoff_cues() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
 
     section("归因一 交接信号：认出「做完了」和「不止一件」")
 
     for msg in ("上传好了", "传好了", "已上传", "发布好了", "都弄好了", "搞定了", "挂上去了"):
-        check(f"「{msg}」识别为交接完成", intent_plan.handoff_done(msg))
+        check(f"「{msg}」识别为交接完成", intent_rules.handoff_done(msg))
 
     for msg in ("帮我卖微波炉", "这个多少钱合适", "怎么才能卖得快一点"):
-        check(f"「{msg}」不是交接完成", not intent_plan.handoff_done(msg))
+        check(f"「{msg}」不是交接完成", not intent_rules.handoff_done(msg))
 
-    check("「都弄好了」识别为多商品", intent_plan.multi_item_cue("都弄好了"))
-    check("「这两件都传好了」识别为多商品", intent_plan.multi_item_cue("这两件都传好了"))
-    check("「上传好了」不是多商品", not intent_plan.multi_item_cue("上传好了"))
+    check("「都弄好了」识别为多商品", intent_rules.multi_item_cue("都弄好了"))
+    check("「这两件都传好了」识别为多商品", intent_rules.multi_item_cue("这两件都传好了"))
+    check("「上传好了」不是多商品", not intent_rules.multi_item_cue("上传好了"))
 
 
 def test_handoff_capture() -> None:
-    from app.services.agents import handoff, intent_plan
+    from app.services.agents import handoff
+    from app.services.nlp import intent_rules
 
     section("归因一 任务挂起：交给 publishing 时把原始诉求记下来")
 
-    hints = intent_plan.hints("帮我卖小白板", [])
+    hints = intent_rules.hints("帮我卖小白板", [])
     patch = handoff.capture(
         route="publishing_agent", scenario="none", slots={"item_ref": "小白板"},
         hints=hints, message="帮我卖小白板", turn_index=0,
@@ -77,7 +78,7 @@ def test_handoff_capture() -> None:
     # 点名了分析的场景，队列里存的就是那个场景，不是笼统的 sell_through。
     patch2 = handoff.capture(
         route="publishing_agent", scenario="price", slots={"item_ref": "显示器"},
-        hints=intent_plan.hints("这个显示器能卖多少钱", []),
+        hints=intent_rules.hints("这个显示器能卖多少钱", []),
         message="这个显示器能卖多少钱", turn_index=0,
     )
     check("点名了定价 → 队列里存 price", patch2.get("pending_tasks") == ["price"], str(patch2))
@@ -85,7 +86,7 @@ def test_handoff_capture() -> None:
     # 纯上架请求后面没有藏着任何分析，不该凭空排队。
     patch3 = handoff.capture(
         route="publishing_agent", scenario="none", slots={},
-        hints=intent_plan.hints("帮我把这个挂出去", []),
+        hints=intent_rules.hints("帮我把这个挂出去", []),
         message="帮我把这个挂出去", turn_index=0,
     )
     check("纯上架请求不排队", patch3 == {}, str(patch3))
@@ -93,7 +94,7 @@ def test_handoff_capture() -> None:
     # 已经在办了就没有什么被打断，不该留条子。
     patch4 = handoff.capture(
         route="sales_agent", scenario="sell_through", slots={"item_ref": "微波炉"},
-        hints=intent_plan.hints("帮我卖微波炉", []),
+        hints=intent_rules.hints("帮我卖微波炉", []),
         message="帮我卖微波炉", turn_index=0,
     )
     check("路由到 sales 时不记交接", patch4 == {}, str(patch4))
@@ -101,7 +102,7 @@ def test_handoff_capture() -> None:
     # clarify 也会悬空原始诉求。「这两件都帮我卖了」在库里对不上东西时，路由器问
     # 「是哪两件」——问得没错，但卖家转头去上架，回来那一跳一样什么都没留下。
     msg5 = "这两件都帮我卖了"
-    hints5 = intent_plan.hints(msg5, [])
+    hints5 = intent_rules.hints(msg5, [])
     patch5 = handoff.capture(
         route="clarify", scenario="none", slots={}, hints=hints5,
         message=msg5, turn_index=0,
@@ -113,7 +114,7 @@ def test_handoff_capture() -> None:
     # 但不是凡澄清必挂起：卖家还没说要卖什么的时候，后台不该排一个队列。
     patch6 = handoff.capture(
         route="clarify", scenario="none", slots={},
-        hints=intent_plan.hints("你能做什么", []),
+        hints=intent_rules.hints("你能做什么", []),
         message="你能做什么", turn_index=0,
     )
     check("普通澄清不挂起", patch6 == {}, str(patch6))
@@ -126,11 +127,12 @@ def test_handoff_capture() -> None:
 
 def test_handoff_resume_gates() -> None:
     """接力的门槛：没有挂起任务时，「上传好了」什么都不该触发。"""
-    from app.services.agents import handoff, intent_plan
+    from app.services.agents import handoff
+    from app.services.nlp import intent_rules
 
     section("归因一 接力门槛：没有任务就不接力")
 
-    hints = intent_plan.hints("上传好了", [])
+    hints = intent_rules.hints("上传好了", [])
     out = handoff.resume_target(None, 1, {"pending_tasks": []}, "上传好了", hints)
     check("没有挂起任务 → 不接力（也不碰数据库）", out is None, str(out))
 
@@ -149,7 +151,7 @@ def test_handoff_resume_gates() -> None:
     state2 = dict(state, turns=[])
     out2 = handoff.resume_target(
         None, 1, state2, "顺便问一下你们平台抽成吗",
-        intent_plan.hints("顺便问一下你们平台抽成吗", []),
+        intent_rules.hints("顺便问一下你们平台抽成吗", []),
     )
     check("无关消息不触发接力", out2 is None, str(out2))
 
@@ -158,7 +160,7 @@ def test_handoff_resume_gates() -> None:
 # 归因二 — 能力缺口的出口
 # ============================================================
 def test_defer_detection() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
 
     section("归因二 延后出售：认出「要卖，但不是现在」")
 
@@ -168,20 +170,20 @@ def test_defer_detection() -> None:
         "这个下个月再挂出去吧",
         "等考完试再卖",
     ):
-        check(f"「{msg}」识别为延后出售", intent_plan.defer_sale_intent(msg))
+        check(f"「{msg}」识别为延后出售", intent_rules.defer_sale_intent(msg))
 
     # 反例：这几条各自属于别的路由，误判成延后出售就是新的答非所问。
     for msg in ("帮我卖微波炉", "先不卖了", "这个多少钱合适", "上个月挂出来的那件怎么样"):
-        check(f"「{msg}」不是延后出售", not intent_plan.defer_sale_intent(msg), msg)
+        check(f"「{msg}」不是延后出售", not intent_rules.defer_sale_intent(msg), msg)
 
     check("「需求涨起来了你能提醒我吗」识别为提醒请求",
-          intent_plan.wants_reminder("需求涨起来了你能提醒我吗"))
+          intent_rules.wants_reminder("需求涨起来了你能提醒我吗"))
     check("「什么时候挂出去最划算」识别为时机问题",
-          intent_plan.timing_question("什么时候挂出去最划算"))
+          intent_rules.timing_question("什么时候挂出去最划算"))
 
 
 def test_date_parsing() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
 
     section("归因二 日期换算：确定性的，而且说得出依据")
 
@@ -194,26 +196,27 @@ def test_date_parsing() -> None:
         ("明年再卖", date(2027, 1, 15), "relative"),
     ]
     for msg, expect, basis in cases:
-        got, got_basis = intent_plan.parse_target_date(msg, today)
+        got, got_basis = intent_rules.parse_target_date(msg, today)
         check(f"「{msg}」→ {expect}", got == expect and got_basis == basis,
               f"got {got} / {got_basis}")
 
-    got, _ = intent_plan.parse_target_date("帮我看看价格", today)
+    got, _ = intent_rules.parse_target_date("帮我看看价格", today)
     check("没有时间词 → 不编一个日期", got is None, str(got))
 
     # 解析出来的日期必须落在未来，否则周扫描会立刻把它关掉。
     for msg in ("等学期末再挂", "12月放假前再卖", "过一阵子再挂"):
-        got, _ = intent_plan.parse_target_date(msg, today)
+        got, _ = intent_rules.parse_target_date(msg, today)
         check(f"「{msg}」落在未来", got is not None and got > today, str(got))
 
 
 def test_defer_routing() -> None:
-    from app.services.agents import intent_plan, router as router_mod
+    from app.services.nlp import intent_rules
+    from app.services.agents import router as router_mod
 
     section("归因二 路由覆盖：不再被 publishing / sales 吸收")
 
     msg = "转换器我打算12月放假前再卖"
-    hints = intent_plan.hints(msg, [])
+    hints = intent_rules.hints(msg, [])
     for came_as in ("publishing_agent", "sales_agent", "clarify"):
         agent, scen, _ = router_mod.apply_defer_sale(came_as, "demand", {}, hints)
         check(f"模型答 {came_as} → 被拉回 defer_sale",
@@ -221,13 +224,13 @@ def test_defer_routing() -> None:
 
     msg2 = "需求涨起来了你能提醒我吗"
     agent, _, _ = router_mod.apply_defer_sale(
-        "clarify", "none", {}, intent_plan.hints(msg2, [])
+        "clarify", "none", {}, intent_rules.hints(msg2, [])
     )
     check("提醒请求也走 defer_sale", agent == "defer_sale", agent)
 
     # 状态变更优先：能立刻办的先办，计划可以之后再说。
     msg3 = "这个先下架，等学期末再挂"
-    hints3 = intent_plan.hints(msg3, [])
+    hints3 = intent_rules.hints(msg3, [])
     agent, _, _ = router_mod.apply_defer_sale("sales_agent", "none", {}, hints3)
     check("「先下架，等学期末再挂」→ 让位给状态变更",
           agent == "sales_agent" and hints3["status_change_intent"] == "pause",
@@ -236,7 +239,7 @@ def test_defer_routing() -> None:
     # 无关消息不该被这条覆盖碰到。
     msg4 = "帮我卖微波炉"
     agent, scen, _ = router_mod.apply_defer_sale(
-        "sales_agent", "sell_through", {}, intent_plan.hints(msg4, [])
+        "sales_agent", "sell_through", {}, intent_rules.hints(msg4, [])
     )
     check("普通卖出意图不受影响",
           agent == "sales_agent" and scen == "sell_through", f"{agent}/{scen}")
@@ -307,7 +310,7 @@ def test_defer_reply_promises() -> None:
     """回执里的每一句都是承诺，所以它只能承诺真的会发生的事。"""
     from types import SimpleNamespace
 
-    from app.services.agents.graph import _defer_reply
+    from app.services.agents.graph.nodes import _defer_reply
 
     section("归因二 回执：承诺与实际判据必须一致")
 
@@ -346,27 +349,28 @@ def test_defer_reply_promises() -> None:
 # 归因三 — 澄清收敛
 # ============================================================
 def test_confirm_authorize_detection() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
 
     section("归因三 确认与授权：两类输入都携带信息")
 
     for msg in ("对", "对，就那个", "是的", "没错", "嗯", "就是它", "确认"):
-        check(f"「{msg}」识别为确认", intent_plan.is_confirmation(msg))
+        check(f"「{msg}」识别为确认", intent_rules.is_confirmation(msg))
 
     for msg in ("都行", "都行，你决定", "随便", "你看着办", "无所谓", "听你的"):
-        check(f"「{msg}」识别为授权", intent_plan.is_authorization(msg))
+        check(f"「{msg}」识别为授权", intent_rules.is_authorization(msg))
 
     # 授权优先于确认：两边都像的时候读成确认，会退化成再问一次。
-    check("「都行，你决定」不被读成确认", not intent_plan.is_confirmation("都行，你决定"))
+    check("「都行，你决定」不被读成确认", not intent_rules.is_confirmation("都行，你决定"))
 
     # 误伤反例：「对了」是话题转折词，不是确认。
     check("「对了，帮我看看价格」不是确认",
-          not intent_plan.is_confirmation("对了，帮我看看价格"))
-    check("「帮我卖微波炉」不是授权", not intent_plan.is_authorization("帮我卖微波炉"))
+          not intent_rules.is_confirmation("对了，帮我看看价格"))
+    check("「帮我卖微波炉」不是授权", not intent_rules.is_authorization("帮我卖微波炉"))
 
 
 def test_clarify_convergence() -> None:
-    from app.services.agents import intent_plan, router as router_mod
+    from app.services.nlp import intent_rules
+    from app.services.agents import router as router_mod
 
     section("归因三 澄清收敛：四条终止条件")
 
@@ -375,7 +379,7 @@ def test_clarify_convergence() -> None:
     def converge(msg, *, filled=None, authorized=False, rounds=0, agent="clarify",
                  scenario="none", slots=None, ctx=None):
         return router_mod.apply_clarify_convergence(
-            agent, scenario, dict(slots or {}), intent_plan.hints(msg, []),
+            agent, scenario, dict(slots or {}), intent_rules.hints(msg, []),
             filled_slots=filled or {}, user_authorized=authorized,
             clarify_rounds=rounds, last_context=ctx if ctx is not None else last_ctx,
             has_active_items=True, max_clarify_rounds=2,
@@ -433,7 +437,7 @@ def test_clarify_convergence() -> None:
 
 def test_forced_default_is_announced() -> None:
     """默认方案必须自报家门——不声不响的默认方案只会被当成答错。"""
-    from app.services.seller_advisor.orchestrator import _continuation_block
+    from app.services.agents.sales.orchestrator import _continuation_block
 
     section("归因三 默认方案要说出来")
 
@@ -447,7 +451,7 @@ def test_forced_default_is_announced() -> None:
 
 
 def test_continuation_block() -> None:
-    from app.services.seller_advisor.orchestrator import _continuation_block
+    from app.services.agents.sales.orchestrator import _continuation_block
 
     section("归因一 接力段：复述原始诉求、逐件处理、缺件如实说")
 
@@ -480,7 +484,7 @@ def test_graph_wiring() -> None:
 
     section("图结构：新节点接上了，状态字段齐了")
 
-    src = open(graph_mod.__file__, encoding="utf-8").read()
+    src = _bootstrap.module_source(graph_mod)
     for node in ("defer_sale",):
         check(f"节点 {node} 已注册", f'add_node("{node}"' in src)
         check(f"节点 {node} 在路由分支表里", f'"{node}": "{node}"' in src)
@@ -710,7 +714,8 @@ def test_sale_plan_live() -> None:
 # --live-router：真实路由调用
 # ============================================================
 def test_router_live() -> None:
-    from app.services.agents import intent_plan, router as router_mod
+    from app.services.nlp import intent_rules
+    from app.services.agents import router as router_mod
 
     section("真实路由调用（花配额）")
 
@@ -722,20 +727,20 @@ def test_router_live() -> None:
     def call(msg, last_ctx=None):
         return router_mod.route(
             message=msg, history=[], has_active_items=True, listings=listings,
-            hints=intent_plan.hints(msg, listings), last_context=last_ctx or {},
+            hints=intent_rules.hints(msg, listings), last_context=last_ctx or {},
         )
 
     r = call("转换器我打算12月放假前再卖")
     check("真实调用：延后出售被路由（或被覆盖）到 defer_sale",
           router_mod.apply_defer_sale(
               r.agent, r.scenario, r.slots.model_dump(),
-              intent_plan.hints("转换器我打算12月放假前再卖", listings),
+              intent_rules.hints("转换器我打算12月放假前再卖", listings),
           )[0] == "defer_sale", f"router said {r.agent}")
 
     r = call("都行，你决定")
     agent, scen, _, why = router_mod.apply_clarify_convergence(
         r.agent, r.scenario, r.slots.model_dump(),
-        intent_plan.hints("都行，你决定", listings),
+        intent_rules.hints("都行，你决定", listings),
         filled_slots={"item_ref": "书架"}, user_authorized=False, clarify_rounds=0,
         last_context={"item_id": 2, "item_name": "宜家四层书架", "scenario": "demand"},
         has_active_items=True, max_clarify_rounds=2,

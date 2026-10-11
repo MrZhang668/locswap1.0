@@ -12,7 +12,7 @@ When LLM_PROVIDER=openai_compat (OpenRouter and similar relays), requests go
 straight through httpx to `{LLM_BASE_URL}/chat/completions`, and the response
 is converted inside this module into Anthropic-shaped content blocks
 (text / tool_use), so the upstream call sites (query_ai /
-seller_advisor.orchestrator) are completely agnostic to the backend.
+agents.sales.orchestrator) are completely agnostic to the backend.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import Any, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from ..config import settings
+from ...config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +100,8 @@ def _log_usage(
     the LangChain-backed agent stack passes the real values through.
     """
     try:
-        from ..db import SessionLocal
-        from ..repositories import TokenUsageRepository
+        from ...db import SessionLocal
+        from ...repositories import TokenUsageRepository
 
         with SessionLocal() as db:
             TokenUsageRepository(db).append(
@@ -454,7 +454,7 @@ class LLMClient:
         Division of labor with complete_json: complete_json handles
         "single-shot Q&A + JSON validation"; this method only performs one API
         round-trip and logs usage. The tool loop, parameter validation, and
-        round caps are all controlled by seller_advisor.orchestrator — the
+        round caps are all controlled by agents.sales.orchestrator — the
         model can only request tools registered there.
         Callers must check self.available first; API exceptions propagate
         as-is, and the caller decides how to degrade.

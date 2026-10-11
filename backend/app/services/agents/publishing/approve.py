@@ -19,14 +19,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from ...config import LOCATION_BY_NAME
-from ...models import ItemStatus, User
-from ...repositories import StatusLogRepository
-from ..item_index import ItemIndexService
-from ..text import clip_sentences
+from ....config import LOCATION_BY_NAME
+from ....models import ItemStatus, User
+from ....repositories import StatusLogRepository
+from ...item_index import ItemIndexService
+from ...text import clip_sentences
 from .pipeline import PublishingError, review_compliance
 from .rules import publishable_findings
 from .schemas import CATEGORIES, CONDITIONS, PublishApproveIn, PublishApproveOut
@@ -43,8 +44,22 @@ def _approval_text(payload: PublishApproveIn) -> str:
     return "\n".join(p for p in parts if p)
 
 
+class ThreadState(Protocol):
+    """How approval reaches the conversation the listing came from.
+
+    The agent graph provides it (`agents.graph.THREAD_STATE`) and the router
+    passes it in, so this module never imports the graph — the graph already
+    imports the publishing pipeline, and the reverse edge made the two a cycle.
+    """
+
+    def read(self, db: Session, thread_id: str) -> dict: ...
+
+    def patch(self, db: Session, thread_id: str, values: dict) -> None: ...
+
+
 def approve_listing(
-    db: Session, index: ItemIndexService, user: User, payload: PublishApproveIn
+    db: Session, index: ItemIndexService, user: User, payload: PublishApproveIn,
+    thread: ThreadState,
 ) -> PublishApproveOut:
     location = LOCATION_BY_NAME.get(payload.pickup_location_name)
     if not location:
@@ -86,7 +101,7 @@ def approve_listing(
     # 答案在**会话状态**里，不在请求体里。`thread_id` 已经在 payload 中，所以服务端
     # 自己去查这个会话被路由去上架时挂起了什么——比加一个客户端字段可靠：那个字段
     # 客户端可以随便填，而这里读的是路由那一刻后端自己写下的事实。
-    hold = _hold_after_publish(db, payload.thread_id)
+    hold = _hold_after_publish(thread, db, payload.thread_id)
     status = ItemStatus.PAUSED if hold else ItemStatus.SELLING
 
     summary = payload.summary.strip() or clip_sentences(payload.description, 2)[:120]
@@ -126,7 +141,7 @@ def approve_listing(
     # 上架这件事到此为止：把会话里属于「正在上架」的那部分状态清掉。放在写库
     # 成功之后，因为在此之前这次上架还可能被合规检查拦下来，而一次被拦下的提交
     # 的草稿箱**不该**清——卖家改完就要接着用它。
-    _settle_thread_after_listing(db, payload.thread_id, item)
+    _settle_thread_after_listing(thread, db, payload.thread_id, item)
 
     if hold:
         # 隐身**必须在回执里说出来**。卖家刚点了「发布」，屏幕上却没有一件在卖的
@@ -173,7 +188,7 @@ _LISTING_DONE_PATCH: dict[str, object] = {
 }
 
 
-def _settle_thread_after_listing(db: Session, thread_id: str, item) -> None:
+def _settle_thread_after_listing(thread: ThreadState, db: Session, thread_id: str, item) -> None:
     """东西已经挂出去了——把这个会话里「正在上架」的那部分状态归零。
 
     写回 checkpoint，而不是等下一轮某个节点顺手覆盖：**上架完成是一个事件**，
@@ -188,8 +203,6 @@ def _settle_thread_after_listing(db: Session, thread_id: str, item) -> None:
     失败不抛。这一步是收尾，商品已经写进库了；一个清不掉的草稿箱会让下一轮多出
     一张草稿卡，而一个因为收尾失败就 500 掉的发布，会让卖家以为东西没挂上去。
     """
-    from ..agents.graph import get_graph
-
     patch = dict(_LISTING_DONE_PATCH)
     patch["last_listed"] = {
         "item_id": int(item.id),
@@ -197,25 +210,21 @@ def _settle_thread_after_listing(db: Session, thread_id: str, item) -> None:
         "at": datetime.utcnow().isoformat(timespec="seconds"),
     }
     try:
-        get_graph().update_state(
-            {"configurable": {"thread_id": thread_id, "db": db}}, patch
-        )
+        thread.patch(db, thread_id, patch)
     except Exception:  # noqa: BLE001  收尾失败不该回滚一次成功的上架
         logger.warning("[publishing] cannot settle thread %s after listing", thread_id)
 
 
-def _hold_after_publish(db: Session, thread_id: str) -> bool:
+def _hold_after_publish(thread: ThreadState, db: Session, thread_id: str) -> bool:
     """这个会话被路由去上架的时候，是不是因为卖家说了「以后再卖」。
 
     读 LangGraph 的 checkpoint，读不到就当成否。这里刻意**失败取假**：读不到状态
     时把商品正常挂出去，最坏是卖家要自己去暂停一次；反过来默认隐身，则是一件他
     以为已经在卖的东西谁也搜不到，而他不会收到任何提示。
     """
-    from ..agents.graph import get_graph
-
     try:
-        snapshot = get_graph().get_state({"configurable": {"thread_id": thread_id, "db": db}})
+        values = thread.read(db, thread_id)
     except Exception:  # noqa: BLE001  线程不存在 / checkpoint 损坏都不该挡住发布
         logger.warning("[publishing] cannot read thread %s state", thread_id)
         return False
-    return bool((snapshot.values or {}).get("hold_after_publish"))
+    return bool(values.get("hold_after_publish"))

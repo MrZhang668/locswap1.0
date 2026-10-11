@@ -36,7 +36,7 @@ from types import SimpleNamespace
 import _bootstrap  # noqa: F401  injects backend into sys.path
 
 from app.services.agents import graph as graph_mod  # noqa: E402
-from app.services.agents import lc_llm  # noqa: E402
+from app.services.llm import langchain_client as lc_llm  # noqa: E402
 from app.services.agents import router as router_mod  # noqa: E402
 
 _failures: list[str] = []
@@ -128,18 +128,18 @@ class use_fake_models:
 
         self._orig_build = lc_llm.build_chat_model
         self._orig_router_build = router_mod.build_chat_model
-        self._orig_graph_conf = graph_mod.llm_configured
+        self._orig_graph_conf = graph_mod.nodes.llm_configured
         self._orig_lc_conf = lc_llm.llm_configured
         lc_llm.build_chat_model = fake_build
         router_mod.build_chat_model = fake_build
-        graph_mod.llm_configured = lambda: (True, "")
+        graph_mod.nodes.llm_configured = lambda: (True, "")
         lc_llm.llm_configured = lambda: (True, "")
         return self
 
     def __exit__(self, *a):
         lc_llm.build_chat_model = self._orig_build
         router_mod.build_chat_model = self._orig_router_build
-        graph_mod.llm_configured = self._orig_graph_conf
+        graph_mod.nodes.llm_configured = self._orig_graph_conf
         lc_llm.llm_configured = self._orig_lc_conf
 
 
@@ -271,14 +271,14 @@ def degraded_turn_is_free() -> None:
     section("a turn that ran no model reports zero, with zero calls")
     from app.db import SessionLocal
 
-    orig = graph_mod.llm_configured
-    graph_mod.llm_configured = lambda: (False, "no key")
+    orig = graph_mod.nodes.llm_configured
+    graph_mod.nodes.llm_configured = lambda: (False, "no key")
     graph_mod.reset_graph()
     try:
         with SessionLocal() as db:
             state = graph_mod.run_turn(db, 1, "在吗", "meter-degraded-1")
     finally:
-        graph_mod.llm_configured = orig
+        graph_mod.nodes.llm_configured = orig
         graph_mod.reset_graph()
     usage = state.get("usage") or {}
     check("degraded turn costs nothing",

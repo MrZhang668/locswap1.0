@@ -38,8 +38,8 @@ from app.db import SessionLocal  # noqa: E402
 from app.models import Item, ItemStatus, StandingWant, User  # noqa: E402
 from app.security import hash_password  # noqa: E402
 from app.services.item_index import get_item_index  # noqa: E402
-from app.services.seller_advisor import tools as T  # noqa: E402
-from app.services.seller_advisor.schemas import (  # noqa: E402
+from app.services.agents.sales import tools as T  # noqa: E402
+from app.services.agents.sales.schemas import (  # noqa: E402
     FindPotentialBuyersInput, ListMyItemsInput,
 )
 from app.services.wants import create_explicit_want  # noqa: E402

@@ -21,7 +21,7 @@ from .geo import haversine_km
 
 #: Best-first. Used both by the `condition` sort and to rank the filter chips.
 #: Derived from CONDITION_DICT rather than spelled out again: this list and
-#: publishing.schemas.CONDITIONS must agree exactly, and the 2026-09-15
+#: agents.publishing.schemas.CONDITIONS must agree exactly, and the 2026-09-15
 #: localization is a reminder of what happens when one canonical vocabulary is
 #: written down in three places.
 CONDITION_ORDER: tuple[str, ...] = tuple(CONDITION_DICT.keys())

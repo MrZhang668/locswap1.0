@@ -47,7 +47,7 @@ def section(title: str) -> None:
 # 归因一 — implicit multi-intent: entity binding + plan
 # ============================================================
 def test_intent_plan() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
 
     section("归因一 隐式多意图：实体绑定 + 计划")
 
@@ -63,7 +63,7 @@ def test_intent_plan() -> None:
         ("我想把书架出了", 2),
         ("笔记本电脑找谁聊？", 3),
     ]:
-        hit = intent_plan.match_listings(msg, listings)
+        hit = intent_rules.match_listings(msg, listings)
         check(
             f"「{msg}」绑定到 item {expect_id}",
             len(hit) == 1 and hit[0]["item_id"] == expect_id,
@@ -71,28 +71,28 @@ def test_intent_plan() -> None:
         )
 
     for msg in ("帮我卖微波炉", "我想把书架出了", "笔记本电脑找谁聊？", "这个台灯怎么卖"):
-        h = intent_plan.hints(msg, listings)
+        h = intent_rules.hints(msg, listings)
         check(f"「{msg}」识别为泛卖出意图", h["broad_sell_intent"], str(h))
 
     # The token floor: a single character must not bind.
     check(
         "单字不绑定（「桌」不命中桌面麦克风支架）",
-        intent_plan.match_listings("桌", listings) == [],
-        str(intent_plan.match_listings("桌", listings)),
+        intent_rules.match_listings("桌", listings) == [],
+        str(intent_rules.match_listings("桌", listings)),
     )
     check(
         "价格数字不当成商品名",
-        intent_plan.match_listings("260 合适吗", listings) == [],
+        intent_rules.match_listings("260 合适吗", listings) == [],
     )
     # A message naming something not in stock binds nothing — that is what
     # sends it to the publishing agent instead of the sales agent.
     check(
         "不在库的商品不绑定（空气炸锅）",
-        intent_plan.match_listings("帮我卖空气炸锅", listings) == [],
+        intent_rules.match_listings("帮我卖空气炸锅", listings) == [],
     )
     check(
         "普通定价问题不算泛卖出意图",
-        not intent_plan.hints("微波炉定价合适吗", listings)["broad_sell_intent"],
+        not intent_rules.hints("微波炉定价合适吗", listings)["broad_sell_intent"],
     )
 
     from app.services.agents.router import SALES_SCENARIOS, Scenario
@@ -105,7 +105,7 @@ def test_intent_plan() -> None:
 
     from app.services.agents.router import apply_broad_sell_plan
 
-    h = intent_plan.hints("帮我卖微波炉", listings)
+    h = intent_rules.hints("帮我卖微波炉", listings)
     for start_agent in ("clarify", "publishing_agent", "sales_agent"):
         agent, scen, slots = apply_broad_sell_plan(start_agent, "none", {"item_ref": ""}, h)
         check(f"在库泛卖出：{start_agent} → sales_agent/sell_through",
@@ -117,18 +117,18 @@ def test_intent_plan() -> None:
         "sales_agent", "price", {"item_ref": "微波炉"}, h)
     check("模型已经选了具体分析就不覆盖成 sell_through", scen == "price")
 
-    h_new = intent_plan.hints("我又收了个微波炉，帮我卖", listings)
+    h_new = intent_rules.hints("我又收了个微波炉，帮我卖", listings)
     agent, _, _ = apply_broad_sell_plan("publishing_agent", "none", {}, h_new)
     check("「又收了一个」不被当成在库", agent == "publishing_agent", str(h_new["new_item_cue"]))
 
     agent, _, _ = apply_broad_sell_plan("publishing_agent", "none", {}, h, has_photo=True)
     check("带照片时不改写路由（拍照的多半是要上架）", agent == "publishing_agent")
 
-    h_none = intent_plan.hints("帮我卖空气炸锅", listings)
+    h_none = intent_rules.hints("帮我卖空气炸锅", listings)
     agent, _, _ = apply_broad_sell_plan("publishing_agent", "none", {}, h_none)
     check("不在库的泛卖出保持上架路由", agent == "publishing_agent")
 
-    from app.services.seller_advisor.orchestrator import _routing_block
+    from app.services.agents.sales.orchestrator import _routing_block
 
     block = _routing_block("sell_through", {"item_ref": "微波炉"})
     check("sell_through 会带上固定三步计划", "analyze_demand" in block and "analyze_sold_prices" in block
@@ -139,17 +139,17 @@ def test_intent_plan() -> None:
 # 归因二 — multi-turn entity context
 # ============================================================
 def test_context_carry() -> None:
-    from app.services.agents import intent_plan
-    from app.services.agents.graph import _carry_context
-    from app.services.seller_advisor.orchestrator import _last_turn_block
+    from app.services.nlp import intent_rules
+    from app.services.agents.graph.nodes import _carry_context
+    from app.services.agents.sales.orchestrator import _last_turn_block
 
     section("归因二 多轮实体上下文继承")
 
     for msg in ("这些买家都什么情况", "第 1 个买家的预算大概多少", "这些人离我远吗", "他们都住哪"):
-        check(f"「{msg}」识别为指代式追问", intent_plan.hints(msg, [])["refers_to_previous"])
+        check(f"「{msg}」识别为指代式追问", intent_rules.hints(msg, [])["refers_to_previous"])
     check(
         "普通提问不算指代",
-        not intent_plan.hints("双人沙发有人找吗", [])["refers_to_previous"],
+        not intent_rules.hints("双人沙发有人找吗", [])["refers_to_previous"],
     )
 
     result = {
@@ -200,7 +200,8 @@ def test_context_carry() -> None:
 # 归因三 — status change: paused status, gate, execution
 # ============================================================
 def test_status_change() -> None:
-    from app.services.agents import intent_plan, proposals as prop
+    from app.services.nlp import intent_rules
+    from app.services.agents import proposals as prop
 
     section("归因三 状态变更意图落地")
 
@@ -210,14 +211,14 @@ def test_status_change() -> None:
     check("reserved 不可暂停", ItemStatus.RESERVED not in ItemStatus.PAUSABLE)
 
     for msg in ("把显示器下架吧", "有机化学课本先不卖了", "这个先撤了", "台灯停一下"):
-        check(f"「{msg}」→ pause", intent_plan.status_change_intent(msg) == "pause",
-              intent_plan.status_change_intent(msg))
+        check(f"「{msg}」→ pause", intent_rules.status_change_intent(msg) == "pause",
+              intent_rules.status_change_intent(msg))
     for msg in ("把台灯重新上架", "沙发恢复上架吧", "那个再挂出来"):
-        check(f"「{msg}」→ resume", intent_plan.status_change_intent(msg) == "resume",
-              intent_plan.status_change_intent(msg))
-    check("「删掉这件」→ delete", intent_plan.status_change_intent("删掉这件") == "delete")
+        check(f"「{msg}」→ resume", intent_rules.status_change_intent(msg) == "resume",
+              intent_rules.status_change_intent(msg))
+    check("「删掉这件」→ delete", intent_rules.status_change_intent("删掉这件") == "delete")
     check("普通销售问题不触发状态变更",
-          intent_plan.status_change_intent("这个台灯有人找吗") == "")
+          intent_rules.status_change_intent("这个台灯有人找吗") == "")
 
     # The gate. Consent may restate the action; anything hedged or negated may not.
     for yes in ("好", "行", "下架吧", "好的，下架吧", "对，暂停吧", "确认", "恢复上架"):
@@ -274,7 +275,7 @@ def test_status_change_live() -> None:
             check("重复 pause 被拒绝", True)
 
         # The read-only tools must not see it while it is paused.
-        from app.services.seller_advisor import tools as tool_impl
+        from app.services.agents.sales import tools as tool_impl
 
         try:
             tool_impl.resolve_owned_item(db, item.seller_id, item.id)
@@ -282,7 +283,7 @@ def test_status_change_live() -> None:
         except tool_impl.ToolError:
             check("已下架商品对分析工具不可见", True)
 
-        from app.services.seller_advisor.schemas import ListMyItemsInput
+        from app.services.agents.sales.schemas import ListMyItemsInput
 
         out = tool_impl.list_my_items(db, item.seller_id, ListMyItemsInput())
         check("默认不列出已下架商品",
@@ -325,8 +326,8 @@ def test_status_gate_end_to_end() -> None:
     from app.services.agents.router import RouteResult, RouteSlots
 
     db = SessionLocal()
-    original_route = g.router_mod.route
-    original_configured = g.llm_configured
+    original_route = g.nodes.router_mod.route
+    original_configured = g.nodes.llm_configured
     try:
         item = (
             db.query(Item)
@@ -346,8 +347,8 @@ def test_status_gate_end_to_end() -> None:
                 slots=RouteSlots(item_ref=name, status_change="pause"),
             )
 
-        g.router_mod.route = pinned
-        g.llm_configured = lambda: (True, "")
+        g.nodes.router_mod.route = pinned
+        g.nodes.llm_configured = lambda: (True, "")
 
         # Unique per run: checkpoints are persistent, so reusing an id means
         # the first turn resumes whatever the previous run left parked and the
@@ -391,8 +392,8 @@ def test_status_gate_end_to_end() -> None:
             db.refresh(item)
             check("测试后已恢复原状", item.status == ItemStatus.SELLING, item.status)
     finally:
-        g.router_mod.route = original_route
-        g.llm_configured = original_configured
+        g.nodes.router_mod.route = original_route
+        g.nodes.llm_configured = original_configured
         g.reset_graph()
         db.close()
 
@@ -402,7 +403,7 @@ def test_status_gate_end_to_end() -> None:
 # ============================================================
 def test_time_window() -> None:
     from app.services.agents.router import RouteSlots, TimeWindow
-    from app.services.seller_advisor.orchestrator import _routing_block
+    from app.services.agents.sales.orchestrator import _routing_block
 
     section("归因四 槽位映射的不可映射出口")
 
@@ -423,9 +424,9 @@ def test_time_window() -> None:
 # 归因五 — scattered: no tool no answer, boundary before entity
 # ============================================================
 def test_guards() -> None:
-    from app.services.agents import intent_plan
-    from app.services.agents.graph import OUT_OF_SCOPE_REPLY, clarify_node
-    from app.services.seller_advisor.orchestrator import DATA_SCENARIOS
+    from app.services.nlp import intent_rules
+    from app.services.agents.graph.nodes import OUT_OF_SCOPE_REPLY, clarify_node
+    from app.services.agents.sales.orchestrator import DATA_SCENARIOS
 
     section("归因五 零散风险点")
 
@@ -435,9 +436,9 @@ def test_guards() -> None:
 
     for msg in ("帮我联系一下买羊毛围巾的那个人的客服", "把订单退了", "帮我买个显示器架",
                 "帮我把台灯挂到别的平台"):
-        check(f"「{msg}」命中越界提示", intent_plan.hints(msg, [])["maybe_out_of_scope"], msg)
+        check(f"「{msg}」命中越界提示", intent_rules.hints(msg, [])["maybe_out_of_scope"], msg)
     check("正常卖家问题不命中越界提示",
-          not intent_plan.hints("羊毛围巾有人找吗", [])["maybe_out_of_scope"])
+          not intent_rules.hints("羊毛围巾有人找吗", [])["maybe_out_of_scope"])
 
     out = clarify_node({"message": "x", "out_of_scope": True, "turns": []}, None)
     check("越界时回的是边界说明而不是能力菜单",
@@ -469,7 +470,8 @@ def test_router_live() -> None:
     it is read as a regression."""
     section("路由器实测（--live-router，会消耗额度）")
 
-    from app.services.agents import intent_plan, router as router_mod
+    from app.services.nlp import intent_rules
+    from app.services.agents import router as router_mod
 
     listings = [
         {"item_id": 11, "name": "美的微波炉 20L", "price": 45.0, "category": "Home & Kitchen"},
@@ -491,14 +493,14 @@ def test_router_live() -> None:
             history=[],
             has_active_items=True,
             listings=listings,
-            hints=intent_plan.hints(msg, listings),
+            hints=intent_rules.hints(msg, listings),
             last_context=ctx or {},
         )
 
     msg0 = "帮我卖微波炉"
     r = call(msg0)
     a0, s0, sl0 = router_mod.apply_broad_sell_plan(
-        r.agent, r.scenario, r.slots.model_dump(), intent_plan.hints(msg0, listings))
+        r.agent, r.scenario, r.slots.model_dump(), intent_rules.hints(msg0, listings))
     check("泛卖出（在库）→ sales_agent + sell_through",
           a0 == "sales_agent" and s0 == "sell_through",
           f"router={r.agent}/{r.scenario} -> {a0}/{s0} fallback={r.fallback_reason}")
@@ -534,7 +536,7 @@ def test_router_live() -> None:
     # the product acts on is the one that comes out of it.
     agent, scen, slots = router_mod.apply_followup_context(
         r.agent, r.scenario, r.slots.model_dump(),
-        intent_plan.hints(msg, listings), last_ctx,
+        intent_rules.hints(msg, listings), last_ctx,
     )
     check("指代式追问落在 sales_agent 且绑定上一轮的商品与场景",
           agent == "sales_agent" and scen == "find_buyers" and "书架" in slots["item_ref"],

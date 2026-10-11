@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from ..config import settings
-from .llm import CALL_SITE_QUERY, LLMResult, get_llm_client
+from .llm.client import CALL_SITE_QUERY, LLMResult, get_llm_client
 from .llm_schemas import QueryUnderstandingOutput
 from .prompts import load_prompt
 

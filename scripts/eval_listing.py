@@ -27,8 +27,8 @@ from app.config import settings
 from app.db import init_db
 from app.services.images import compress_and_save
 from app.db import SessionLocal
-from app.services.publishing.pipeline import PublishingError, extract_listing
-from app.services.llm import get_llm_client
+from app.services.agents.publishing.pipeline import PublishingError, extract_listing
+from app.services.llm.client import get_llm_client
 
 EVAL_DIR = Path(__file__).resolve().parent / "eval_images"
 KEY_ATTRS = ("category", "brand", "condition", "color")

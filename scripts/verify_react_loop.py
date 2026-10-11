@@ -37,8 +37,8 @@ from app.config import settings  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.models import Item, ItemStatus, StandingWant, WantStatus  # noqa: E402
 from app.services.agents import proposals as P  # noqa: E402
-from app.services.seller_advisor import tools as T  # noqa: E402
-from app.services.seller_advisor.schemas import FindPotentialBuyersInput  # noqa: E402
+from app.services.agents.sales import tools as T  # noqa: E402
+from app.services.agents.sales.schemas import FindPotentialBuyersInput  # noqa: E402
 
 _failures: list[str] = []
 
@@ -175,7 +175,7 @@ def suspension(db) -> None:
           f"react={settings.advisor_react_max_loops} tools={settings.seller_advisor_max_tool_rounds}")
     src = (G.__file__,)
     import inspect
-    text = inspect.getsource(G)
+    text = _bootstrap.module_source(G)
     check("act is only reachable through the confirm branch",
           '_after_propose' in text and '"act": "act"' in text)
     check("run_turn resumes a parked thread instead of restarting it",

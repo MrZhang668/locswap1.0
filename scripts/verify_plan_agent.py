@@ -43,8 +43,8 @@ def section(title: str) -> None:
 # 静态契约：这个 agent 长得像不像一个 agent
 # ============================================================
 def test_agent_shape() -> None:
-    from app.services import plan_agent
-    from app.services.plan_agent import orchestrator as orch
+    from app.services.agents import planning as plan_agent
+    from app.services.agents.planning import orchestrator as orch
 
     section("形态：和 sales_agent 同一套骨架")
 
@@ -115,8 +115,8 @@ def _seller(db):
 def test_tools_live() -> None:
     from app.db import SessionLocal
     from app.models import SalePlan, SalePlanStatus
-    from app.services.plan_agent import tools as T
-    from app.services.plan_agent.schemas import (
+    from app.services.agents.planning import tools as T
+    from app.services.agents.planning.schemas import (
         CancelSalePlanInput,
         CreateSalePlanInput,
         ListSalePlansInput,
@@ -124,7 +124,7 @@ def test_tools_live() -> None:
         SetPlanWatchInput,
         UpdateSalePlanInput,
     )
-    from app.services.seller_advisor.tools import ToolError
+    from app.services.agents.sales.tools import ToolError
 
     section("工具层：所有权、日期、承诺、开关")
 
@@ -304,7 +304,8 @@ def test_tools_live() -> None:
 # 路由：计划类消息去 defer_sale，而且不许被读成商品下架
 # ============================================================
 def test_plan_routing() -> None:
-    from app.services.agents import intent_plan, router as router_mod
+    from app.services.nlp import intent_rules
+    from app.services.agents import router as router_mod
 
     section("路由：计划动作 vs 商品上下架")
 
@@ -319,17 +320,17 @@ def test_plan_routing() -> None:
         ("需求涨起来了你能提醒我吗", "create"),
     ]
     for msg, expect in cases:
-        got = intent_plan.plan_action_intent(msg)
+        got = intent_rules.plan_action_intent(msg)
         check(f"「{msg}」→ {expect}", got == expect, f"got {got!r}")
 
     # 反例：这几条属于商品上下架，不是计划开关。读错了，卖家只想少收几封邮件，
     # 商品却从搜索里消失了。
     for msg in ("把台灯暂停一下", "先不卖了", "有机化学课本下架吧", "帮我卖微波炉"):
-        check(f"「{msg}」不是计划动作", intent_plan.plan_action_intent(msg) == "", msg)
+        check(f"「{msg}」不是计划动作", intent_rules.plan_action_intent(msg) == "", msg)
 
     # 覆盖函数：计划动作必须赢过 status_change。
     msg = "别提醒我了"
-    hints = intent_plan.hints(msg, [])
+    hints = intent_rules.hints(msg, [])
     for came_as in ("sales_agent", "publishing_agent", "clarify"):
         agent, scen, _ = router_mod.apply_defer_sale(came_as, "demand", {}, hints)
         check(f"「{msg}」从 {came_as} 被拉回 defer_sale",
@@ -337,7 +338,7 @@ def test_plan_routing() -> None:
 
     # 「转换器那条撤了吧」同时命中 pause 和 cancel——计划动作优先。
     msg2 = "转换器那条撤了吧"
-    hints2 = intent_plan.hints(msg2, [])
+    hints2 = intent_rules.hints(msg2, [])
     agent, _, _ = router_mod.apply_defer_sale("sales_agent", "none", {}, hints2)
     check("「那条撤了吧」走计划而不是商品下架",
           agent == "defer_sale" and hints2["status_change_intent"] == "pause",
@@ -345,7 +346,7 @@ def test_plan_routing() -> None:
 
     # 但「转换器撤了吧」（没有「那条」）仍然是商品下架。
     msg3 = "转换器撤了吧"
-    hints3 = intent_plan.hints(msg3, [])
+    hints3 = intent_rules.hints(msg3, [])
     agent, _, _ = router_mod.apply_defer_sale("sales_agent", "none", {}, hints3)
     check("没有「那条」时仍然是商品下架",
           agent == "sales_agent" and hints3["plan_action_intent"] == "",
@@ -360,14 +361,14 @@ def test_graph_and_degraded() -> None:
 
     section("图接线与降级")
 
-    src = open(graph_mod.__file__, encoding="utf-8").read()
+    src = _bootstrap.module_source(graph_mod)
     check("defer_sale 节点调的是 plan_agent", "run_plan_agent" in src)
     check("没有 key 时退回确定性实现", "_deterministic_plan_node" in src)
     check("expected_action 从 hints 传进去", "plan_action_intent" in src)
     check("计划这一路不写 last_context",
           "计划这一路不产生买家卡片" in src or "不写 `last_context`" in src)
 
-    from app.services.plan_agent.orchestrator import DEGRADED_REPLY
+    from app.services.agents.planning.orchestrator import DEGRADED_REPLY
 
     check("降级回复不承诺任何提醒",
           "提醒" not in DEGRADED_REPLY.replace("出售计划助手", ""), DEGRADED_REPLY)
@@ -376,7 +377,7 @@ def test_graph_and_degraded() -> None:
 def test_switch_single_source() -> None:
     """界面开关和对话开关必须落在同一个字段上。"""
     from app.routers import seller as seller_router
-    from app.services.plan_agent import tools as T
+    from app.services.agents.planning import tools as T
 
     section("开关：两条路一个字段")
 
@@ -391,15 +392,15 @@ def test_switch_single_source() -> None:
     check("工具也改 SalePlan.watch_enabled",
           "plan.watch_enabled = params.enabled" in tool_src)
     check("列表视图复用工具层的 _view，不另算一份",
-          "from ..services.plan_agent.tools import _view" in api_src)
+          "from ..services.agents.planning.tools import _view" in api_src)
 
 
 def test_weekly_pass_respects_switch() -> None:
     from app.db import SessionLocal
     from app.models import SalePlan
     from app.services import sale_plans
-    from app.services.plan_agent import tools as T
-    from app.services.plan_agent.schemas import CreateSalePlanInput
+    from app.services.agents.planning import tools as T
+    from app.services.agents.planning.schemas import CreateSalePlanInput
 
     section("周扫描：两个开关都认")
 
@@ -482,8 +483,8 @@ def test_hold_links() -> None:
     from app.models import Item, ItemStatus, SalePlan, SalePlanStatus
     from app.services.item_index import get_item_index
     from app.services.lifecycle import LifecycleService
-    from app.services.plan_agent import tools as T
-    from app.services.plan_agent.schemas import CreateSalePlanInput
+    from app.services.agents.planning import tools as T
+    from app.services.agents.planning.schemas import CreateSalePlanInput
 
     section("「量大了再卖」三条链路：隐身 / 上传后隐身 / 取消隐身撤计划")
 
@@ -552,13 +553,14 @@ def test_hold_links() -> None:
 
 def test_hold_link2_wiring() -> None:
     """链路 2 的接线：未上传 → 先上架，且「上传完要隐身」这个记号传得到 approve。"""
-    from app.services.agents import handoff, intent_plan
+    from app.services.agents import handoff
+    from app.services.nlp import intent_rules
     from app.services.agents import graph as graph_mod
-    from app.services.publishing.approve import _hold_after_publish
+    from app.services.agents.publishing.approve import _hold_after_publish
 
     section("链路 2 接线：未上传时先去上架，记号能传到 approve")
 
-    src = open(graph_mod.__file__, encoding="utf-8").read()
+    src = _bootstrap.module_source(graph_mod)
     check("图里有「库里没有就先上架」这条分叉",
           'route, scenario = "publishing_agent", "none"' in src)
     check("挂起时会写 hold_after_publish", '"hold_after_publish"] = True' in src or
@@ -568,7 +570,7 @@ def test_hold_link2_wiring() -> None:
 
     # 挂起的任务类型必须是 defer_sale，否则接力回来会去 sales_agent 做分析，
     # 而卖家要的是把计划记下来。
-    hints = intent_plan.hints("老式打字机等学期末再卖", [])
+    hints = intent_rules.hints("老式打字机等学期末再卖", [])
     patch = handoff.capture(
         route="publishing_agent", scenario="none", slots={"item_ref": "老式打字机"},
         hints=hints, message="老式打字机等学期末再卖", turn_index=0,
@@ -584,7 +586,7 @@ def test_hold_link2_wiring() -> None:
     db = SessionLocal()
     try:
         check("读不到会话状态时不隐身（失败取假）",
-              _hold_after_publish(db, "no-such-thread-xyz") is False)
+              _hold_after_publish(graph_mod.THREAD_STATE, db, "no-such-thread-xyz") is False)
     finally:
         db.close()
 
@@ -595,7 +597,7 @@ def test_hold_link2_wiring() -> None:
 def test_live_agent() -> None:
     from app.db import SessionLocal
     from app.models import SalePlan
-    from app.services.plan_agent import run_plan_agent
+    from app.services.agents.planning import run_plan_agent
 
     section("真实对话（花配额）")
 

@@ -1,6 +1,6 @@
 """调用点 H：延后出售识别。
 
-「我想在 2 个月后出售这支笔」——这层意思以前由 `intent_plan` 里的两条正则判：
+「我想在 2 个月后出售这支笔」——这层意思以前由 `intent_rules` 里的两条正则判：
 未来时间锚点 + 卖出动词，两半都命中才算。那套规则的好处是每次都一样，坏处是
 它认得的只有**写在表里的那几个词**：「出售」不在卖出动词表里，「2 个月后」不在
 时间锚点表里，于是这句话两半都落空，商品被当场挂上了货架——和卖家说的话正好
@@ -35,8 +35,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ...config import settings
 from ..prompts import load_prompt
-from . import intent_plan
-from .lc_llm import CALL_SITE_DEFER_INTENT, build_chat_model, record_usage, router_model_name
+from ..nlp import intent_rules
+from ..llm.langchain_client import CALL_SITE_DEFER_INTENT, build_chat_model, record_usage, router_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +86,8 @@ class _DeferVerdict(BaseModel):
 def _lexical(message: str, *, dropped: list[str] | None = None) -> DeferReading:
     """原来那两条正则。现在只在这里出现——它是兜底，不是主判据。"""
     return DeferReading(
-        is_defer=intent_plan.defer_sale_intent(message),
-        wants_reminder=intent_plan.wants_reminder(message),
+        is_defer=intent_rules.defer_sale_intent(message),
+        wants_reminder=intent_rules.wants_reminder(message),
         source="lexical",
         dropped=list(dropped or []),
     )

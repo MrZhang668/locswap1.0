@@ -42,7 +42,7 @@ from app.config import (  # noqa: E402
     normalize_condition,
     settings,
 )
-from app.services.llm import get_llm_client  # noqa: E402
+from app.services.llm.client import get_llm_client  # noqa: E402
 from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 
 CACHE_PATH = PROJECT_ROOT / "data" / "_zh_corpus_cache.json"

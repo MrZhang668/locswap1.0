@@ -28,7 +28,7 @@ import sys
 import _bootstrap  # noqa: F401  injects backend into sys.path
 
 from app.services.agents import router as R  # noqa: E402
-from app.services.seller_advisor.orchestrator import _routing_block  # noqa: E402
+from app.services.agents.sales.orchestrator import _routing_block  # noqa: E402
 
 _failures: list[str] = []
 
@@ -203,7 +203,7 @@ def main() -> int:
     offline()
     if args.live:
         ok, reason = __import__(
-            "app.services.agents.lc_llm", fromlist=["llm_configured"]
+            "app.services.llm.langchain_client", fromlist=["llm_configured"]
         ).llm_configured()
         if not ok:
             print(f"\n--live requested but no model is configured: {reason}")

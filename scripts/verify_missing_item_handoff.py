@@ -67,7 +67,7 @@ LISTINGS = [
 # 一、闸门：办不办得成是一条事实
 # ============================================================
 def test_missing_item_gate() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
     from app.services.agents import router as router_mod
 
     section("闸门：点名了一件库里没有的东西")
@@ -78,7 +78,7 @@ def test_missing_item_gate() -> None:
             "sales_agent",
             slots or {"item_ref": (refs or [""])[0]},
             refs or [],
-            intent_plan.hints(msg, rows),
+            intent_rules.hints(msg, rows),
             rows,
             photo,
         )
@@ -119,7 +119,7 @@ def test_missing_item_gate() -> None:
 
     route, _ = router_mod.apply_missing_item_gate(
         "publishing_agent", {"item_ref": "水杯"}, ["水杯"],
-        intent_plan.hints("帮我挂个水杯", LISTINGS), LISTINGS, False,
+        intent_rules.hints("帮我挂个水杯", LISTINGS), LISTINGS, False,
     )
     check("本来就去上架的一轮 → 闸门不插手", route == "publishing_agent", f"got {route}")
 
@@ -128,14 +128,15 @@ def test_missing_item_gate() -> None:
 # 二、挂账：新路由是钩子的触发点
 # ============================================================
 def test_capture_on_missing_item() -> None:
-    from app.services.agents import handoff, intent_plan
+    from app.services.agents import handoff
+    from app.services.nlp import intent_rules
 
     section("挂账：item_not_found 这一轮必须记账")
 
     msg = "想分析水杯的需求和价格并找买家"
     patch = handoff.capture(
         route="item_not_found", scenario="both",
-        slots={"item_ref": "水杯"}, hints=intent_plan.hints(msg, LISTINGS),
+        slots={"item_ref": "水杯"}, hints=intent_rules.hints(msg, LISTINGS),
         message=msg, turn_index=0, item_refs=["水杯"],
     )
     check("挂了账（补丁非空）", bool(patch))
@@ -150,7 +151,7 @@ def test_capture_on_missing_item() -> None:
     # sales_agent，整张条子就不存在。
     old = handoff.capture(
         route="sales_agent", scenario="both",
-        slots={"item_ref": "水杯"}, hints=intent_plan.hints(msg, LISTINGS),
+        slots={"item_ref": "水杯"}, hints=intent_rules.hints(msg, LISTINGS),
         message=msg, turn_index=0, item_refs=["水杯"],
     )
     check("sales_agent 本身仍然不挂账（那是已经在办了）", old == {}, f"got {old}")
@@ -158,7 +159,7 @@ def test_capture_on_missing_item() -> None:
     # 路由器没给出具体场景时也得挂——卖家刚把诉求说出口了。
     plain = handoff.capture(
         route="item_not_found", scenario="none",
-        slots={"item_ref": "水杯"}, hints=intent_plan.hints("我的水杯呢", LISTINGS),
+        slots={"item_ref": "水杯"}, hints=intent_rules.hints("我的水杯呢", LISTINGS),
         message="我的水杯呢", turn_index=0, item_refs=["水杯"],
     )
     check("场景是 none 也照样挂账（兜底 sell_through）",
@@ -167,7 +168,7 @@ def test_capture_on_missing_item() -> None:
     multi = handoff.capture(
         route="item_not_found", scenario="both",
         slots={"item_ref": "水杯"},
-        hints=intent_plan.hints("水杯和保温壶都看一下", LISTINGS),
+        hints=intent_rules.hints("水杯和保温壶都看一下", LISTINGS),
         message="水杯和保温壶都看一下", turn_index=0, item_refs=["水杯", "保温壶"],
     )
     check("多件一起挂，不是只挂最后一件",
@@ -199,7 +200,8 @@ class _FakeRepo:
 
 
 def test_resume_photo_guard() -> None:
-    from app.services.agents import handoff, intent_plan
+    from app.services.agents import handoff
+    from app.services.nlp import intent_rules
 
     section("接力守卫：带照片的那一轮不接力")
 
@@ -221,7 +223,7 @@ def test_resume_photo_guard() -> None:
 
         with_photo = handoff.resume_target(
             None, 1, {**state, "photo_path": "u/1.jpg"}, "上传了",
-            intent_plan.hints("上传了", []),
+            intent_rules.hints("上传了", []),
         )
         check("带图的「上传了」不接力（否则这次上架被换成一次分析）",
               with_photo is None, f"got {with_photo}")
@@ -229,7 +231,7 @@ def test_resume_photo_guard() -> None:
         # 同一句话、同一个库，只是这一轮没带图：兜底匹配照常工作。
         without = handoff.resume_target(
             None, 1, {**state, "photo_path": ""}, "上传了",
-            intent_plan.hints("上传了", []),
+            intent_rules.hints("上传了", []),
         )
         check("不带图时兜底匹配仍然接力", without is not None and bool(without.get("items")),
               f"got {without}")
@@ -241,7 +243,7 @@ def test_resume_photo_guard() -> None:
         ]
         resumed = handoff.resume_target(
             None, 1, {**state, "photo_path": ""}, "上传好了",
-            intent_plan.hints("上传好了", []),
+            intent_rules.hints("上传好了", []),
         )
         ok = resumed is not None and [i["item_id"] for i in resumed["items"]] == [12]
         check("「上传好了」按时间绑上刚上架的那件（名字对不上也绑得到）", ok, f"got {resumed}")
@@ -260,7 +262,7 @@ def test_resume_photo_guard() -> None:
 # ============================================================
 def test_listing_done_patch() -> None:
     from app.services.agents.graph import AdvisorState
-    from app.services.publishing.approve import _LISTING_DONE_PATCH
+    from app.services.agents.publishing.approve import _LISTING_DONE_PATCH
 
     section("上架完成：清草稿箱，留账本")
 
@@ -286,7 +288,8 @@ def test_listing_done_patch() -> None:
 # ============================================================
 def test_graph_wiring() -> None:
     from app.services.agents import handoff, router as router_mod
-    from app.services.agents.graph import AdvisorState, get_graph, item_not_found_node
+    from app.services.agents.graph import AdvisorState, get_graph
+    from app.services.agents.graph.nodes import item_not_found_node
 
     section("接线：新节点真的在图里")
 
@@ -346,8 +349,8 @@ def test_three_turns() -> None:
         ),
     ]
 
-    saved = (graph_mod._seller_facts, router_mod.route, handoff.ItemRepository)
-    graph_mod._seller_facts = fake_facts
+    saved = (graph_mod.nodes._seller_facts, router_mod.route, handoff.ItemRepository)
+    graph_mod.nodes._seller_facts = fake_facts
     router_mod.route = fake_route
     handoff.ItemRepository = _FakeRepo
     _FakeRepo.rows = [_FakeItem(1, "蓝牙音箱", parked_at - timedelta(days=9)),
@@ -358,7 +361,7 @@ def test_three_turns() -> None:
         # --- 第一轮：分析一件库里没有的东西 -----------------------------
         state = {"seller_id": 1, "message": "想分析水杯的需求和价格并找买家",
                  "photo_path": "", "turns": []}
-        patch = graph_mod.route_node(state, cfg)
+        patch = graph_mod.nodes.route_node(state, cfg)
         state = {**state, **patch}
         check("第一轮改判为 item_not_found", state["route"] == "item_not_found",
               f"got {state['route']}")
@@ -367,12 +370,12 @@ def test_three_turns() -> None:
         check("第一轮记下了原话",
               state.get("original_intent") == "想分析水杯的需求和价格并找买家")
 
-        node_out = graph_mod.item_not_found_node(state, cfg)
+        node_out = graph_mod.nodes.item_not_found_node(state, cfg)
         state = {**state, **node_out}
 
         # --- 第二轮：传图 + 「上传了」 -----------------------------------
         state = {**state, "message": "上传了", "photo_path": "uploads/cup.jpg"}
-        patch = graph_mod.route_node(state, cfg)
+        patch = graph_mod.nodes.route_node(state, cfg)
         state = {**state, **patch}
         check("第二轮去上架，没被接力劫持", state["route"] == "publishing_agent",
               f"got {state['route']}")
@@ -389,7 +392,7 @@ def test_three_turns() -> None:
 
         # --- 第三轮：「上传好了」 ---------------------------------------
         state = {**state, "message": "上传好了", "photo_path": ""}
-        patch = graph_mod.route_node(state, cfg)
+        patch = graph_mod.nodes.route_node(state, cfg)
         state = {**state, **patch}
 
         check("第三轮回到销售分析，不是反问", state["route"] == "sales_agent",
@@ -409,7 +412,7 @@ def test_three_turns() -> None:
         check("第三轮没再调路由器（队列在，算得出来）", len(_SCRIPTED) == 0,
               f"{len(_SCRIPTED)} scripted route(s) unused")
     finally:
-        graph_mod._seller_facts, router_mod.route, handoff.ItemRepository = saved
+        graph_mod.nodes._seller_facts, router_mod.route, handoff.ItemRepository = saved
         _FakeRepo.rows = []
 
 
@@ -417,9 +420,9 @@ def test_three_turns() -> None:
 # 七、上架是有终点的：发布完之后再说一次「上传好了」
 # ============================================================
 def test_listing_done_gate() -> None:
-    from app.services.agents import intent_plan
+    from app.services.nlp import intent_rules
     from app.services.agents import router as router_mod
-    from app.services.agents.graph import listing_done_node
+    from app.services.agents.graph.nodes import listing_done_node
 
     section("上架终点：发布完之后的「上传好了」不能再进上架流程")
 
@@ -427,7 +430,7 @@ def test_listing_done_gate() -> None:
 
     def gate(msg, *, agent="publishing_agent", text="", photo=False, last=None):
         return router_mod.apply_listing_done_gate(
-            agent, intent_plan.hints(msg, []), text, photo,
+            agent, intent_rules.hints(msg, []), text, photo,
             listed if last is None else last,
         )
 
@@ -487,8 +490,8 @@ def test_second_upload_done() -> None:
             slots=router_mod.RouteSlots(), rewritten_query="上传好了",
         )
 
-    saved = (graph_mod._seller_facts, router_mod.route, handoff.ItemRepository)
-    graph_mod._seller_facts = fake_facts
+    saved = (graph_mod.nodes._seller_facts, router_mod.route, handoff.ItemRepository)
+    graph_mod.nodes._seller_facts = fake_facts
     router_mod.route = fake_route
     handoff.ItemRepository = _FakeRepo
     _FakeRepo.rows = [_FakeItem(946, "乐高史努比狗屋积木", datetime.utcnow())]
@@ -503,25 +506,25 @@ def test_second_upload_done() -> None:
             "last_listed": {"item_id": 946, "name": "乐高史努比狗屋积木",
                             "at": datetime.utcnow().isoformat(timespec="seconds")},
         }
-        patch = graph_mod.route_node(state, cfg)
+        patch = graph_mod.nodes.route_node(state, cfg)
         state = {**state, **patch}
         check("第二句「上传好了」不再回上架流程", state["route"] == "listing_done",
               f"got {state['route']}")
 
-        out = graph_mod.listing_done_node(state, cfg)
+        out = graph_mod.nodes.listing_done_node(state, cfg)
         reply = out["result"]["reply"]
         check("回复点名了已经挂出去的那件", "乐高史努比狗屋积木" in reply)
         check("回复明说不用再传", "不用再传" in reply)
         check("不再追问成色", "成色" not in reply and "未拆封" not in reply)
 
         # 同一句话，但草稿箱里还有东西——那是一次正在进行的上架，不能拦。
-        mid = graph_mod.route_node(
+        mid = graph_mod.nodes.route_node(
             {**state, "publish_text": "一盒乐高 八成新", "last_listed": {}}, cfg
         )
         check("正在进行的上架不受影响", mid["route"] == "publishing_agent",
               f"got {mid['route']}")
     finally:
-        graph_mod._seller_facts, router_mod.route, handoff.ItemRepository = saved
+        graph_mod.nodes._seller_facts, router_mod.route, handoff.ItemRepository = saved
         _FakeRepo.rows = []
 
 
@@ -540,10 +543,10 @@ def test_form_is_the_answer() -> None:
       而下面那张表里「成色 · 必填」就是一个下拉框——同一个问题问了两遍，一遍
       要打字，一遍点一下就完了。
     """
-    from app.services.publishing.rules import (
+    from app.services.agents.publishing.rules import (
         SUPPRESSED_IN_PUBLISHING, publishable_findings,
     )
-    from app.services.publishing.schemas import PublishFinding
+    from app.services.agents.publishing.schemas import PublishFinding
 
     section("一张照片就够了：缺的在表里补")
 
@@ -591,7 +594,7 @@ def test_form_is_the_answer() -> None:
 
 def _reply_for(missing, ready):
     """把 `publish_extract_node` 里那段选词逻辑照抄一遍，用来断言文案。"""
-    from app.services.publishing.schemas import field_label
+    from app.services.agents.publishing.schemas import field_label
 
     names = [field_label(f) for f in missing if f]
     if ready or not names:

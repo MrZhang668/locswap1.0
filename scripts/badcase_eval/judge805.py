@@ -41,7 +41,7 @@ sys.path.insert(0, str(_HERE.parent))
 import _bootstrap  # noqa: E402,F401
 
 from app.config import settings  # noqa: E402
-from app.services.agents.lc_llm import build_chat_model  # noqa: E402
+from app.services.llm.langchain_client import build_chat_model  # noqa: E402
 from app.services.prompts import load_prompt  # noqa: E402
 
 #: Families where an `unsure` is recorded as a failure.

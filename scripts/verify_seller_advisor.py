@@ -47,24 +47,24 @@ os.environ["EXPIRY_POLL_INTERVAL_SECONDS"] = "3600"
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.services.agents.graph as graph_mod  # noqa: E402
-import app.services.publishing.approve as approve_mod  # noqa: E402
-import app.services.publishing.pipeline as publishing_mod  # noqa: E402
+import app.services.agents.publishing.approve as approve_mod  # noqa: E402
+import app.services.agents.publishing.pipeline as publishing_mod  # noqa: E402
 import app.services.agents.sessions as sessions_mod  # noqa: E402
-import app.services.seller_advisor.orchestrator as orch  # noqa: E402
+import app.services.agents.sales.orchestrator as orch  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import Item, Notification, StandingWant, TokenUsageLog  # noqa: E402
 from app.repositories import ItemRepository  # noqa: E402
 from app.services.prompts import load_prompt  # noqa: E402
-from app.services.publishing.rules import active_rules, retrieve_rules, seed_rules  # noqa: E402
-from app.services.publishing.schemas import ComplianceVerdict, ListingDraft, PublishFinding  # noqa: E402
-from app.services.seller_advisor.schemas import (  # noqa: E402
+from app.services.agents.publishing.rules import active_rules, retrieve_rules, seed_rules  # noqa: E402
+from app.services.agents.publishing.schemas import ComplianceVerdict, ListingDraft, PublishFinding  # noqa: E402
+from app.services.agents.sales.schemas import (  # noqa: E402
     AnalyzeSoldPricesInput,
     FindPotentialBuyersInput,
     ListMyItemsInput,
 )
-from app.services.seller_advisor.tools import (  # noqa: E402
+from app.services.agents.sales.tools import (  # noqa: E402
     ToolError,
     analyze_sold_prices,
     find_potential_buyers,
@@ -188,23 +188,23 @@ class use_fake_route:
                 "has_active_items": has_active_items, "listings": listings,
                 "has_photo": has_photo, **extra,
             })
-            return graph_mod.router_mod.RouteResult(
+            return graph_mod.nodes.router_mod.RouteResult(
                 agent=outer.agent,
                 rewritten_query=outer.rewritten or message,
                 clarify_question=outer.question,
             )
 
-        self._orig = graph_mod.router_mod.route
-        graph_mod.router_mod.route = fake_route
+        self._orig = graph_mod.nodes.router_mod.route
+        graph_mod.nodes.router_mod.route = fake_route
         # Routing only happens at all when a model is configured; pinning the
         # decision implies that precondition.
-        self._orig_configured = graph_mod.llm_configured
-        graph_mod.llm_configured = lambda: (True, "")
+        self._orig_configured = graph_mod.nodes.llm_configured
+        graph_mod.nodes.llm_configured = lambda: (True, "")
         return self
 
     def __exit__(self, *a):
-        graph_mod.router_mod.route = self._orig
-        graph_mod.llm_configured = self._orig_configured
+        graph_mod.nodes.router_mod.route = self._orig
+        graph_mod.nodes.llm_configured = self._orig_configured
 
 
 class use_fake_publishing:
@@ -253,13 +253,13 @@ class use_fake_llm:
         # The graph short-circuits to its degraded node when no key is
         # configured — correct in production, but here a fake client *is* the
         # configuration, so the guard has to agree with it.
-        self._orig_configured = graph_mod.llm_configured
-        graph_mod.llm_configured = lambda: (True, "")
+        self._orig_configured = graph_mod.nodes.llm_configured
+        graph_mod.nodes.llm_configured = lambda: (True, "")
         return self.fake
 
     def __exit__(self, *a):
         orch.get_llm_client = self._orig
-        graph_mod.llm_configured = self._orig_configured
+        graph_mod.nodes.llm_configured = self._orig_configured
 
 
 def final_json(reply: str, pricing=None, **extra) -> str:
@@ -694,13 +694,13 @@ def main() -> int:  # noqa: PLR0915
 
         broken = FakeClient([fake_response([text_block(final_json("unused"))])])
         with use_fake_llm(broken):
-            orig = graph_mod.router_mod.route
-            graph_mod.router_mod.route = lambda **kw: graph_mod.router_mod._fallback(
+            orig = graph_mod.nodes.router_mod.route
+            graph_mod.nodes.router_mod.route = lambda **kw: graph_mod.nodes.router_mod._fallback(
                 "router call failed: RuntimeError", kw["message"])
             try:
                 r = seller.post("/api/seller/advisor/chat", json={"message": "anything"})
             finally:
-                graph_mod.router_mod.route = orig
+                graph_mod.nodes.router_mod.route = orig
         body = r.json()
         check("a failed routing call degrades to clarify, never to a specialist",
               body["route"] == "clarify" and broken.calls == [], r.text[:200])

@@ -29,8 +29,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ...config import settings
-from ...models import (
+from ....config import settings
+from ....models import (
     DemandEvent,
     DemandEventKind,
     Item,
@@ -40,11 +40,11 @@ from ...models import (
     WantStatus,
     utcnow,
 )
-from ...repositories import ItemRepository
-from ...repositories.want_repo import StandingWantRepository
-from ..geo import haversine_km
-from ..text import raw_tokens
-from ..want_index import get_want_index
+from ....repositories import ItemRepository
+from ....repositories.want_repo import StandingWantRepository
+from ...geo import haversine_km
+from ...text import raw_tokens
+from ...want_index import get_want_index
 from .schemas import (
     MIN_BUYERS_TO_SHOW_PHRASE,
     PRICE_BINS_MAX,

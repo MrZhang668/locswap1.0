@@ -34,13 +34,13 @@ from typing import Any, Callable
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from ...config import settings
-from ...models import ItemStatus
-from ...repositories import ItemRepository
-from ..agents import intent_plan
-from ..agents.lc_llm import get_advisor_client as get_llm_client
-from ..llm import CALL_SITE_SELLER_ADVISOR, extract_json
-from ..prompts import load_prompt
+from ....config import settings
+from ....models import ItemStatus
+from ....repositories import ItemRepository
+from ...nlp import intent_rules
+from ...llm.langchain_client import get_advisor_client as get_llm_client
+from ...llm.client import CALL_SITE_SELLER_ADVISOR, extract_json
+from ...prompts import load_prompt
 from . import tools as tool_impl
 from .schemas import (
     AnalyzeDemandInput,
@@ -525,7 +525,7 @@ def _output_contract_block(contract: dict) -> str:
     demands: list[str] = []
     if contract.get("brief"):
         demands.append(OUTPUT_DEMANDS["brief"].format(
-            budget=int(contract.get("budget") or intent_plan.BRIEF_REPLY_BUDGET)))
+            budget=int(contract.get("budget") or intent_rules.BRIEF_REPLY_BUDGET)))
     shape = contract.get("shape")
     if shape in OUTPUT_DEMANDS:
         demands.append(OUTPUT_DEMANDS[shape])
@@ -552,8 +552,8 @@ def _contract_violation(reply: str, contract: dict) -> str:
     if not contract or not reply:
         return ""
     if contract.get("brief"):
-        budget = int(contract.get("budget") or intent_plan.BRIEF_REPLY_BUDGET)
-        limit = int(budget * intent_plan.BRIEF_OVERRUN_RATIO)
+        budget = int(contract.get("budget") or intent_rules.BRIEF_REPLY_BUDGET)
+        limit = int(budget * intent_rules.BRIEF_OVERRUN_RATIO)
         if len(reply) > limit:
             return (f"卖家要求简短，而你给出的回复有 {len(reply)} 字，"
                     f"超过了 {budget} 字的上限。重写一版：保留结论和最关键的一两个数字，"

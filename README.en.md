@@ -95,10 +95,15 @@ Authentication is hand-rolled: PBKDF2-SHA256 password hashes and HMAC-signed tok
 │           ├── lifecycle.py     # item state machine (selling / reserved / paused / sold)
 │           ├── sale_plans.py    # sale plans and the weekly demand check
 │           ├── scheduler.py     # background loops: expiry, sale-plan checks
-│           ├── agents/          # LangGraph graph: intent routing, confirmation interrupts, sessions
-│           ├── seller_advisor/  # sales-advisor tools and orchestration
-│           ├── publishing/      # publishing flow: rule book, compliance review, draft extraction
-│           └── plan_agent/      # sale-plan agent
+│           ├── llm/             # model access: client (official SDK / OpenAI-compatible), langchain_client (agent models, token metering)
+│           ├── nlp/             # deterministic language rules: intent lexicon, date parsing (no model calls)
+│           └── agents/          # agent layer
+│               ├── graph/       # LangGraph graph: state / nodes / routing (topology) / runtime (compile, checkpoints, run_turn)
+│               ├── router.py    # intent routing (call site D); defer_intent.py "sell it later" detection (H)
+│               ├── proposals.py # the two confirmed write actions; handoff.py parked tasks; sessions.py threads
+│               ├── sales/       # sales advisor: tools and tool-calling loop (C)
+│               ├── publishing/  # publishing flow: rule book, compliance, extraction, approval (E, F)
+│               └── planning/    # sale-plan agent (G)
 ├── frontend/
 │   ├── vite.config.js           # dev proxy: /api, /static → backend on 8010; /tiles → OSM
 │   └── src/

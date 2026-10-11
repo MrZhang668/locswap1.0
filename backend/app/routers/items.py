@@ -25,7 +25,7 @@ from ..services.browse import SORTS, BrowseFilters, filter_and_sort
 from ..services.images import ALLOWED_SUFFIX, compress_and_save
 from ..services.item_index import ItemIndexService
 from ..services.wants import notify_optin_buyers
-from ..services.publishing.schemas import CATEGORIES, CONDITIONS
+from ..services.agents.publishing.schemas import CATEGORIES, CONDITIONS
 from ..services.text import clip_sentences
 from ..services.views import build_card
 

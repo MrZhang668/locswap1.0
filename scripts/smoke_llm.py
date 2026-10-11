@@ -17,7 +17,7 @@ import _bootstrap  # noqa: F401
 from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
-from app.services.llm import get_llm_client
+from app.services.llm.client import get_llm_client
 
 
 class Echo(BaseModel):

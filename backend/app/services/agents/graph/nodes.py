@@ -1,30 +1,6 @@
-"""The agent graph: route once, then hand off to one specialist (LangGraph).
-
-    START -> route -> sales_agent -> propose -(nothing to propose)-> END
-                                             -(interrupt: seller answers)-> act -> END
-                   -> status_change -(interrupt: seller confirms)-> act -> END
-                   -> publishing_agent -> publish_compliance -> (block) -> END
-                                                             -> publish_extract -> END
-                   -> defer_sale -> END
-                   -> clarify    -> END
-                   -> item_not_found -> END   (named something they do not own)
-                   -> listing_done   -> END   ("uploaded it" — and it is already live)
-                   -> degraded   -> END
-
-Why a graph rather than another hand-written branch:
-* the conversation is checkpointed per thread, so history stops being something
-  the browser posts back and starts being state the server owns;
-* the routing decision, the rewritten query and the specialist's result are all
-  in one inspectable state object rather than spread across local variables;
-* the publishing flow is a multi-step pipeline with a real branch — a blocked
-  submission must not reach extraction at all — which is exactly what this
-  structure is for.
-
-What deliberately did **not** move into the graph: the seller advisor's tool
-loop. Its Pydantic validation, per-item ownership resolution, round caps,
-result caching and server-side suppression of ungrounded output are the safety
-properties of this feature. They stay in `seller_advisor.orchestrator`, and the
-node here just calls it.
+"""The advisor graph's nodes: one function per step, each returning the state
+patch it produces. How they are wired is in `routing`; compiling and running
+the graph is in `runtime`.
 
 The SQLAlchemy session travels in `config["configurable"]`, never in the state:
 state gets serialized into the checkpoint, and a live DB session must not.
@@ -35,21 +11,23 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date
-from typing import Any, TypedDict
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 from sqlalchemy.orm import Session
 
-from ...config import settings
-from ...models import ItemStatus, User
-from ...repositories import ItemRepository
-from ..prompts import load_prompt
-from ..seller_advisor.schemas import AdvisorChatTurn
-from . import defer_intent, handoff, intent_plan
-from . import proposals as prop
-from . import router as router_mod
-from .lc_llm import llm_configured, read_turn_meter, start_turn_meter
+from ....config import settings
+from ....models import ItemStatus, User
+from ....repositories import ItemRepository
+from ...prompts import load_prompt
+from ..sales.schemas import AdvisorChatTurn
+from ...llm.langchain_client import llm_configured
+from ...nlp import intent_rules
+from .. import defer_intent, handoff
+from .. import proposals as prop
+from .. import router as router_mod
+from .state import AdvisorState
 
 logger = logging.getLogger(__name__)
 
@@ -70,140 +48,6 @@ OUT_OF_SCOPE_REPLY = (
 #: material and size are nice to have; without these four a buyer cannot find
 #: the item or judge it.
 REQUIRED_DRAFT_FIELDS = ("name", "description", "category", "condition")
-
-
-class AdvisorState(TypedDict, total=False):
-    """Per-thread state. Everything here is checkpointed, so it must stay
-    JSON-shaped — no ORM objects, no sessions."""
-
-    seller_id: int
-    message: str                 # the seller's raw message this turn
-    turns: list[dict]            # persisted conversation, oldest first
-    has_active_items: bool
-    listings: list[dict]
-    route: str
-    #: Which analysis the sales agent should run; "none" for every other route.
-    scenario: str
-    #: The router's closed-set extraction, already validated. JSON-shaped
-    #: because everything in this state is checkpointed.
-    slots: dict
-    rewritten_query: str
-    clarify_question: str
-    #: True when the router judged the request outside what a seller-side
-    #: advisor does at all. Kept in state so the clarify node can state a
-    #: boundary instead of asking a question.
-    out_of_scope: bool
-    #: The deterministic pre-router reading of this message (entity binding,
-    #: broad-sell / status-change / coreference cues). Advice for the router
-    #: and the resolution input for the status-change gate.
-    hints: dict
-    #: 这一轮被丢弃的非法槽位值，连同卖家的原话。专家看到它就必须先回问，
-    #: 不得替他推断一个合法值（4.1.5）。
-    slot_warnings: list[dict]
-    #: 这一轮**必须**有结果的工具。服务端算出来的，与 `scenario` 无关：
-    #: 「我一共挂了几件东西」的 scenario 是 none，但它的答案只能来自
-    #: `list_my_items`（4.2.3）。
-    required_tools: list[str]
-    #: 卖家这一轮对**回复形式**提的要求（要多短、要不要表格）。和内容无关，所以
-    #: 不走 scenario：「简单说，破壁机行情怎么样」问的还是行情。读自他的原话，
-    #: 因为这是一条他下达的指令，不是一种可以由模型体会的风格偏好（5.3.3/5.3.4）。
-    output_contract: dict
-    # ---- session-level task state (see `handoff`) ----
-    #: What the seller originally asked for, in their own words, when a hop
-    #: through publishing got in the way of it.
-    original_intent: str
-    #: The analyses still owed to them. A list because a queue is a list — the
-    #: single-value version of this is what dropped every item but the last.
-    pending_tasks: list[str]
-    #: The entities those analyses are about, as the seller named them.
-    pending_items: list[dict]
-    #: When the task was parked, ISO. Resuming binds to listings created after
-    #: this moment, which is a fact about the database rather than a guess
-    #: about which word the seller used in the listing form.
-    handoff_at: str
-    handoff_turn: int
-    handoff_multi: bool
-    #: 这次去上架，是因为卖家说了「以后再卖」。上传完成之后那件商品**默认隐身**
-    #: （在库中、不曝光），而不是直接开卖——他说的就是「现在先不卖」。
-    #: 服务端状态而不是前端标记：`publish/approve` 带着 thread_id 过来，能自己
-    #: 查这个会话的状态，不需要相信客户端传了什么。
-    hold_after_publish: bool
-    #: Set on the turn a parked task is picked back up, so the reply can say
-    #: what it is continuing rather than starting as if nothing preceded it.
-    handoff_note: dict
-    #: 这一轮卖家点名了、但他名下根本没有的商品。非空即意味着这一轮走的是
-    #: `item_not_found`：没有可执行的分析，诉求已经挂账，回复由服务端写。
-    missing_items: list[str]
-    #: 这个会话里最近一次**真的发布成功**的商品（`{item_id, name, at}`）。由
-    #: `approve` 在写库成功那一刻写进来——上架完成是一个发生在图之外的事件，
-    #: 图这边只能靠它主动写一次才知道。用完即清：它回答的是「刚才挂出去的是
-    #: 哪件」，而这个问题只在紧接着的那一两轮里成立。
-    last_listed: dict
-    # ---- clarification state machine (see `router.apply_clarify_convergence`) ----
-    #: Slots the seller has already settled in this thread. Nothing here may be
-    #: asked about a second time.
-    filled_slots: dict
-    #: The seller said "you decide". Session-level on purpose: handing the
-    #: choice over once should not have to be repeated.
-    user_authorized: bool
-    #: Consecutive turns that ended in a question. Past the cap, a default plan
-    #: runs instead of a third identical question.
-    clarify_rounds: int
-    #: Why a default plan was chosen instead of asking ("authorized" /
-    #: "clarify_cap"). Empty when the seller's own words picked the route.
-    forced_default: str
-    #: Several listings this turn is about, when it is about several. `slots`
-    #: holds one `item_ref` because a slot is one value; a resumed multi-item
-    #: handoff is the case that needs all of them.
-    item_refs: list[str]
-    #: A recorded plan to sell something later — what the defer node wrote.
-    sale_plan: dict
-    #: What the previous turn produced: the listing it was about and a short
-    #: summary of the buyer cards it returned. This is what makes "这些买家都
-    #: 什么情况" resolvable — without it the turn is a fresh search whose
-    #: result no longer matches what the seller is looking at.
-    last_context: dict
-    #: 这个会话里被真正分析过的商品，最近的在前，按 item_id 去重。
-    #:
-    #: 指代候选集就是它。不是卖家的全部在售商品——「那个再看一下」在一个谈过两件
-    #: 东西的对话里是两个候选，在一个谈过一件东西的对话里是一个候选，而卖家名下
-    #: 有多少件在售跟这句话指谁毫无关系。拿全部在售当候选集，会把一次澄清变成
-    #: 一道十八选一的选择题。
-    discussed_items: list[dict]
-    #: 上一轮**产出**的结构化结论，最近的在前。
-    #:
-    #: 「那按这个价能找到人吗」里的「这个价」指的是这里的 price 类结论，不是
-    #: 商品的 `price` 字段。两者都是数字、都真实存在，读错的那一版输出**完全
-    #: 正常**——路由对、工具对，只有取值悄悄换了一个来源（6.1.2）。
-    #:
-    #: 只存结论，不存明细：候选买家的联系方式是活的工具结果，隔一轮复述一遍
-    #: 就是拿一份可能过期的名单当现状。明细要用就重新调工具。
-    result_stack: list[dict]
-    #: 这一轮的指代判定结果：候选是空、唯一、还是不唯一。不唯一时它同时是
-    #: 「必须澄清」的依据和（万一被授权/轮次上限逼出默认方案时）「必须自报
-    #: 家门」的依据。
-    ambiguity: dict
-    router_fallback: str
-    router_in: int
-    router_out: int
-    result: dict                 # the payload the API layer turns into AdvisorChatOut
-    # ---- the outer advice loop ----
-    #: Proposals made so far in this thread, against advisor_react_max_loops.
-    react_loops: int
-    #: The validated proposal the seller is being asked about, if any.
-    pending_action: dict
-    #: What the last confirmed action actually did.
-    action_result: dict
-    #: Set when a confirm prompt was answered with something that was not a yes;
-    #: carries that message so it can still be answered on its own terms.
-    declined_message: str
-    # ---- publishing flow, accumulated across turns of one thread ----
-    publish_text: str            # everything the seller has said about this item
-    publish_photo: str           # relative path of the one uploaded photo
-    publish_verdict: str
-    publish_findings: list[dict]
-    publish_draft: dict
-    photo_path: str              # photo attached to *this* turn
 
 
 def _db(config: RunnableConfig) -> Session:
@@ -244,7 +88,7 @@ def route_node(state: AdvisorState, config: RunnableConfig) -> dict[str, Any]:
     # Entity binding belongs on this side — it is a token comparison against
     # rows we already hold, and asking a model to do it costs a call and buys a
     # chance to invent an item.
-    hints = intent_plan.hints(state["message"], listings)
+    hints = intent_rules.hints(state["message"], listings)
     last_context = state.get("last_context") or {}
 
     # With no key there is nothing to route to, and routing anyway would answer
@@ -319,7 +163,7 @@ def route_node(state: AdvisorState, config: RunnableConfig) -> dict[str, Any]:
             "required_tools": [],
             # 形式要求读自卖家最早那句话：现在这一句是「上传好了」，
             # 里面没有任何形式要求可读。
-            "output_contract": intent_plan.output_contract(
+            "output_contract": intent_rules.output_contract(
                 resume["original_intent"] or state["message"]),
             "item_refs": names,
             "ambiguity": {},
@@ -572,7 +416,7 @@ def sales_node(state: AdvisorState, config: RunnableConfig) -> dict[str, Any]:
     # Imported here, not at module scope: the advisor orchestrator pulls its
     # model client out of services.agents, so a top-level import would close a
     # cycle. The dependency only ever runs one way — graph calls advisor.
-    from ..seller_advisor.orchestrator import run_advisor
+    from ..sales.orchestrator import run_advisor
 
     all_turns = state.get("turns", [])
     history = [
@@ -893,15 +737,11 @@ def act_node(state: AdvisorState, config: RunnableConfig) -> dict[str, Any]:
     }
 
 
-def _after_propose(state: AdvisorState) -> str:
-    return "act" if state.get("pending_action") else "end"
-
-
 def _ask_for_proposal(state: AdvisorState, result: dict) -> prop.ActionProposal | None:
     """One cheap structured call: given what was just found, is there a next
     step worth asking about? Returns None on any failure — a proposal that
     could not be produced cleanly is not worth reconstructing."""
-    from .lc_llm import CALL_SITE_ROUTER, build_chat_model, record_usage, router_model_name
+    from ...llm.langchain_client import CALL_SITE_ROUTER, build_chat_model, record_usage, router_model_name
 
     cards = []
     for group in result.get("potential_buyers") or []:
@@ -1010,7 +850,7 @@ def _resolve_for_status(
     "which one" against the wrong set is how a resume request gets answered
     with "you have nothing paused" while the paused item sits right there.
     """
-    from ...models import Item
+    from ....models import Item
 
     wanted = ItemStatus.RESUMABLE if target == "resume" else ItemStatus.PAUSABLE
     rows = [
@@ -1029,8 +869,8 @@ def _resolve_for_status(
     # a paraphrase that substituted a listing name would bind the match to a
     # word the seller never said.
     for text in (str((state.get("slots") or {}).get("item_ref") or ""), state["message"]):
-        matches = intent_plan.match_listings(text, listings) if text else []
-        winner = intent_plan.best_match(matches)
+        matches = intent_rules.match_listings(text, listings) if text else []
+        winner = intent_rules.best_match(matches)
         if winner is not None:
             return by_id[int(winner["item_id"])], ""
         if matches:
@@ -1089,7 +929,7 @@ DEFER_LIMITS_NO_CATEGORY = (
 
 
 def defer_sale_node(state: AdvisorState, config: RunnableConfig) -> dict[str, Any]:
-    """出售计划这一路的入口：交给 `plan_agent`（调用点 G）。
+    """出售计划这一路的入口：交给 `agents.planning`（调用点 G）。
 
     这个节点自己不做业务判断，和 `sales_node` 是同一个形状——图负责把轮次路由到
     正确的专家，专家自己带工具、带提示词、带轮次上限。本轮之前它是一段写死的
@@ -1101,16 +941,16 @@ def defer_sale_node(state: AdvisorState, config: RunnableConfig) -> dict[str, An
       API key 的环境里「记一条计划」仍然能用。一个只在配好 key 时才存在的承诺，
       对着 demo 环境就是一句空话。
 
-    确定性的东西**没有交给模型**，而是作为事实注入（`plan_agent` 里的
+    确定性的东西**没有交给模型**，而是作为事实注入（`agents.planning` 里的
     `<parsed_date>` / `<my_plans>` / `<watch_switch>`）：日期换算仍然由
-    `intent_plan.parse_target_date` 做，承诺文案仍然由工具层生成。模型拿到的是
+    `intent_rules.parse_target_date` 做，承诺文案仍然由工具层生成。模型拿到的是
     选择权，不是这些值的编辑权。
     """
     ok, _ = llm_configured()
     if not ok:
         return _deterministic_plan_node(state, config)
 
-    from ..plan_agent import run_plan_agent
+    from ..planning import run_plan_agent
 
     history = [
         AdvisorChatTurn(role=t["role"], content=t["content"][:2000])
@@ -1152,7 +992,7 @@ def _deterministic_plan_node(state: AdvisorState, config: RunnableConfig) -> dic
 
     三件事故意留在服务端：
 
-    * **日期换算** —— 「12 月放假前」落到哪一天，是 `intent_plan.parse_target_date`
+    * **日期换算** —— 「12 月放假前」落到哪一天，是 `intent_rules.parse_target_date`
       的确定性结果，不是模型的即兴发挥；而且换算结果会被**说出来**，因为一个猜错的
       日期和一个猜对的日期在回复里长得一模一样；
     * **承诺的措辞** —— 写死在上面的常量里。能力边界不是每轮重新组织语言的地方；
@@ -1168,14 +1008,14 @@ def _deterministic_plan_node(state: AdvisorState, config: RunnableConfig) -> dic
     item_name = str(slots.get("item_ref") or "").strip()
     item_id = None
     matches = hints.get("name_matches") or []
-    winner = intent_plan.best_match(matches) if matches else None
+    winner = intent_rules.best_match(matches) if matches else None
     if winner is not None:
         # 名字对上了一件在售商品：计划挂到它身上，卖家想先下架再等也说得通。
         item_name = item_name or str(winner.get("name") or "")
         item_id = int(winner["item_id"])
 
     # ---- 什么时候 ----
-    target, basis = intent_plan.parse_target_date(message)
+    target, basis = intent_rules.parse_target_date(message)
     if target is None and hints.get("defer_target_date"):
         # 调用点 H 算出来的那个日期。排在词法规则之后、路由槽位之前：这三者都
         # 可能给出日期，而顺序就是可信度顺序——能算的不问模型，要问也问那个
@@ -1205,7 +1045,7 @@ def _deterministic_plan_node(state: AdvisorState, config: RunnableConfig) -> dic
         return {"result": {"ok": True, "reply": reply}, "turns": _append(state, reply)}
 
     # ---- 记下来 ----
-    from ..sale_plans import MAX_ACTIVE_PLANS_PER_SELLER, active_plan_count, create_plan
+    from ...sale_plans import MAX_ACTIVE_PLANS_PER_SELLER, active_plan_count, create_plan
 
     seller_id = int(state["seller_id"])
     if active_plan_count(db, seller_id) >= MAX_ACTIVE_PLANS_PER_SELLER:
@@ -1461,14 +1301,8 @@ def view_get(draft: Any, field: str) -> Any:
     return getattr(draft.attributes, field, None)
 
 
-def _after_compliance(state: AdvisorState) -> str:
-    """A blocked or failed submission stops here — extraction is only for
-    things that may actually be listed."""
-    return "stop" if state.get("publish_verdict") in ("block", "error") else "extract"
-
-
 def degraded_node(state: AdvisorState, config: RunnableConfig) -> dict[str, Any]:
-    from ..seller_advisor.orchestrator import DEGRADED_REPLY   # lazy: see sales_node
+    from ..sales.orchestrator import DEGRADED_REPLY   # lazy: see sales_node
 
     return {
         "result": {
@@ -1584,158 +1418,3 @@ def _append(state: AdvisorState, reply: str) -> list[dict]:
         {"role": "user", "content": state["message"]},
         {"role": "assistant", "content": reply},
     ]
-
-
-def _pick(state: AdvisorState) -> str:
-    return state.get("route") or "clarify"
-
-
-# ---------------- Graph construction ----------------
-_graph = None
-_checkpointer = None
-
-
-def get_checkpointer():
-    """Checkpoints go to their own SQLite file under DATA_DIR.
-
-    Persistent rather than in-process because conversations are now named
-    things a seller manages in a list: a restart that leaves the list intact
-    but every transcript empty is worse than not having the list. Kept in a
-    separate file from the business database so a checkpoint-format change
-    never touches listings.
-    """
-    global _checkpointer
-    if _checkpointer is None:
-        import sqlite3
-
-        from langgraph.checkpoint.sqlite import SqliteSaver
-
-        settings.data_path.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(
-            str(settings.data_path / "advisor_threads.sqlite"), check_same_thread=False
-        )
-        _checkpointer = SqliteSaver(conn)
-        _checkpointer.setup()
-    return _checkpointer
-
-
-def get_graph():
-    """Compiled once per process; nodes are stateless so this is safe to share."""
-    global _graph
-    if _graph is None:
-        from langgraph.graph import END, START, StateGraph
-
-        builder = StateGraph(AdvisorState)
-        builder.add_node("route", route_node)
-        builder.add_node("sales_agent", sales_node)
-        builder.add_node("status_change", status_change_node)
-        builder.add_node("propose", propose_node)
-        builder.add_node("act", act_node)
-        builder.add_node("defer_sale", defer_sale_node)
-        builder.add_node("publishing_agent", publishing_node)
-        builder.add_node("publish_compliance", publish_compliance_node)
-        builder.add_node("publish_extract", publish_extract_node)
-        builder.add_node("clarify", clarify_node)
-        builder.add_node("item_not_found", item_not_found_node)
-        builder.add_node("listing_done", listing_done_node)
-        builder.add_node("degraded", degraded_node)
-        builder.add_edge(START, "route")
-        builder.add_conditional_edges(
-            "route",
-            _pick,
-            {
-                "sales_agent": "sales_agent",
-                "status_change": "status_change",
-                "defer_sale": "defer_sale",
-                "publishing_agent": "publishing_agent",
-                "clarify": "clarify",
-                "item_not_found": "item_not_found",
-                "listing_done": "listing_done",
-                "degraded": "degraded",
-            },
-        )
-        builder.add_edge("publishing_agent", "publish_compliance")
-        builder.add_conditional_edges(
-            "publish_compliance", _after_compliance,
-            {"extract": "publish_extract", "stop": END},
-        )
-        builder.add_edge("sales_agent", "propose")
-        builder.add_conditional_edges("propose", _after_propose, {"act": "act", "end": END})
-        # The status-change gate ends in the same `act` node as a push: one
-        # place where a confirmed action is carried out, one place where its
-        # outcome is written back into the reply.
-        builder.add_conditional_edges(
-            "status_change", _after_propose, {"act": "act", "end": END}
-        )
-        for node in (
-            "act", "publish_extract", "defer_sale", "clarify",
-            "item_not_found", "listing_done", "degraded",
-        ):
-            builder.add_edge(node, END)
-        _graph = builder.compile(checkpointer=get_checkpointer())
-    return _graph
-
-
-def reset_graph() -> None:
-    """Test hook: rebuild the graph and drop every checkpoint."""
-    global _graph, _checkpointer
-    _graph = None
-    _checkpointer = None
-
-
-def run_turn(
-    db: Session, seller_id: int, message: str, thread_id: str, photo_path: str = ""
-) -> AdvisorState:
-    """One turn through the graph. Returns the resulting state.
-
-    `router_in`/`router_out` are reset per turn: they are this turn's bill, and
-    a checkpointed thread would otherwise keep re-adding every earlier turn's
-    tokens to the total.
-
-    What the turn actually cost is metered in `lc_llm` instead of summed out of
-    the state, and attached to the returned snapshot as `usage`. The state
-    cannot answer the question honestly: `propose_node` spends a model call
-    whose return value `interrupt()` throws away, a declined proposal runs the
-    graph twice for one turn, and a resumed thread carries the *previous*
-    turn's counters in its checkpoint. The meter sees every call either way,
-    and starting it here — once, around everything — is what makes the number
-    this turn's rather than the thread's.
-    """
-    start_turn_meter()
-    graph = get_graph()
-    config = {"configurable": {"thread_id": thread_id, "db": db}}
-
-    # A thread paused at a confirm prompt is resumed with this message as the
-    # answer, not restarted with it as a new question. Checked against the
-    # graph's own state rather than a flag we keep: the graph is the authority
-    # on whether it is suspended, and a flag could disagree with it.
-    snapshot = graph.get_state(config)
-    if snapshot.next:
-        logger.info("[react] resuming thread %s at %s", thread_id, snapshot.next)
-        resumed = graph.invoke(Command(resume=message), config=config)
-        declined = resumed.get("declined_message")
-        if not declined:
-            resumed["usage"] = read_turn_meter()
-            return resumed
-        # Not a yes, so the offer is gone — but the seller said something, and
-        # it deserves an answer rather than being spent as a "no". Run it as an
-        # ordinary turn, which is what it would have been had nothing been
-        # pending.
-        logger.info("[react] proposal declined; answering the message instead")
-        graph.update_state(config, {"declined_message": ""})
-
-    state = graph.invoke(
-        {
-            "seller_id": int(seller_id),
-            "message": message,
-            "photo_path": photo_path or "",
-            "router_in": 0,
-            "router_out": 0,
-        },
-        config=config,
-    )
-    # Read after the invoke, not accumulated into the state: `usage` never
-    # reaches the checkpoint, so it cannot be mistaken for thread state and
-    # re-reported on a later turn.
-    state["usage"] = read_turn_meter()
-    return state

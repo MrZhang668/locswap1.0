@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 #: 库存都等学期末再卖」这种输入不会变成三十封邮件。
 MAX_ACTIVE_PLANS_PER_SELLER = 10
 
-#: 快照里参与关键词比对的 token 至少要这么长。和 `intent_plan._content_tokens`
+#: 快照里参与关键词比对的 token 至少要这么长。和 `intent_rules._content_tokens`
 #: 同一个理由：单字会把「桌」匹配到「桌面麦克风」。
 _MIN_TOKEN_LEN = 2
 
@@ -281,7 +281,7 @@ def weekly_reading(db: Session, plan: SalePlan, week_start: date) -> dict:
 
     两条路，选哪条由一个事实决定——这条计划有没有挂在一件在售商品上：
 
-    * 挂上了（`plan.item_id` 有值且商品还在售）→ 直接调 `seller_advisor.tools
+    * 挂上了（`plan.item_id` 有值且商品还在售）→ 直接调 `agents.sales.tools
       .analyze_demand`。那是销售顾问回答「有多少人在找这类东西」时用的**同一个
       函数**，不是它的复刻版。这么做不是为了省代码，是为了让两个地方报出来的数
       永远一致：卖家在对话里问一次、在邮件里收一次，两个数字对不上的时候他不会
@@ -312,8 +312,8 @@ def _reading_via_analyze_demand(db: Session, plan: SalePlan) -> dict | None:
     预订数仍然按类别数：`analyze_demand` 报的是搜索和曝光，没有预订这一层，而
     预订是两条判据里更硬的那个信号（搜索说明有人在看，预订说明有人在买）。
     """
-    from .seller_advisor.schemas import AnalyzeDemandInput
-    from .seller_advisor.tools import ToolError, analyze_demand
+    from .agents.sales.schemas import AnalyzeDemandInput
+    from .agents.sales.tools import ToolError, analyze_demand
 
     try:
         # `allow_held=True`：这条计划多半**就是把商品收起来等**的，而「收起来」
@@ -587,8 +587,8 @@ def run_weekly_pass(db: Session, *, today: date | None = None, force: bool = Fal
     `force` 只给验收脚本用：它跳过「这一周跑过没有」这道闸门。它**不跳过**触发
     判据——强制跑出来的通知和自然跑出来的是同一批。
     """
-    from .plan_agent.schemas import PeekPlanDemandInput
-    from .plan_agent.tools import peek_plan_demand   # lazy: plan_agent.tools imports us
+    from .agents.planning.schemas import PeekPlanDemandInput
+    from .agents.planning.tools import peek_plan_demand   # lazy: planning.tools imports us
 
     today = today or date.today()
     closed = close_expired(db, today)

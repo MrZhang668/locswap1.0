@@ -42,8 +42,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ...config import CATEGORY_DICT, settings
 from ..prompts import load_prompt
-from . import intent_plan
-from .lc_llm import CALL_SITE_ROUTER, build_chat_model, record_usage, router_model_name
+from ..nlp import intent_rules
+from ..llm.langchain_client import CALL_SITE_ROUTER, build_chat_model, record_usage, router_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class RouteSlots(BaseModel):
     #: field alone; it only routes the turn to the confirmation gate.
     status_change: StatusChange = ""
     #: When the seller wants to sell *later*: the date they named, as
-    #: YYYY-MM-DD. The deterministic parser in `intent_plan` runs first and
+    #: YYYY-MM-DD. The deterministic parser in `intent_rules` runs first and
     #: wins; this is the fallback for wordings it has no rule for. Validated
     #: below like every other query-driving value — a date in the past or two
     #: years out is a parse failure wearing a date's clothes.
@@ -195,7 +195,7 @@ def _facts_block(
         "listings": listings[:10],
     }
     if hints:
-        # Computed in `intent_plan` before this call: which listing names the
+        # Computed in `intent_rules` before this call: which listing names the
         # message actually overlaps, plus a few deterministic readings of what
         # kind of message it is. `name_matches` is a fact (a token comparison
         # against the seller's own rows); the rest are advice, and the prompt
@@ -234,7 +234,7 @@ def _sanitize(
     model normalises 「降到-50」 into `price_hint=50` and hands over a value that
     is legal in every way except that the seller never said it. A check that can
     only see the normalised value cannot tell that apart from a real $50 — only
-    the raw text can, so `intent_plan.scan_illegal_prices` reads it there and the
+    the raw text can, so `intent_rules.scan_illegal_prices` reads it there and the
     verdict arrives here as evidence.
     """
     dropped: list[str] = []
@@ -348,7 +348,7 @@ def apply_broad_sell_plan(
         return agent, scenario, slots
 
     updated = dict(slots)
-    winner = intent_plan.best_match(matches)
+    winner = intent_rules.best_match(matches)
     if not updated.get("item_ref") and winner is not None:
         updated["item_ref"] = str(winner.get("name") or "")[:120]
     if scenario in ("", "none"):
@@ -838,7 +838,7 @@ def apply_missing_item_gate(
         return agent, []
     missing = [
         r for r in refs
-        if not intent_plan.best_match(intent_plan.match_listings(r, listings))
+        if not intent_rules.best_match(intent_rules.match_listings(r, listings))
     ]
     if len(missing) != len(refs):
         # 至少有一件是找得到的：这一轮有真活可干，剩下那几件由顾问在回复里说明。
