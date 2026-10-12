@@ -14,7 +14,7 @@ import logging
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
-from ..config import LOCATION_BY_NAME
+from ..config import LOCATION_BY_NAME, other_subcategory, valid_head_noun, valid_subcategory
 from ..db import get_db
 from ..deps import get_current_user, get_index, get_optional_user
 from ..models import ItemStatus, User
@@ -84,6 +84,13 @@ def create_item(
 
     if not summary:
         summary = clip_sentences(description or name, 2)[:120] or name
+    # 子类目不必填：这条路上没有模型来猜，而让一次上架因为一个可选的细分而失败
+    # 不值得。没选、或选的不属于这个大类，就落到该大类的「其他…」。
+    attributes["subcategory"] = valid_subcategory(
+        attributes["category"], attributes.get("subcategory")
+    ) or other_subcategory(attributes["category"])
+    # 这条路没有抽取步骤，中心词通常是空的；查找时这类商品退回按标题分词比对。
+    attributes["head_noun"] = valid_head_noun(name, attributes.get("head_noun"))
     attributes.setdefault("brand", None)
     attributes.setdefault("color", None)
 
@@ -121,6 +128,7 @@ def create_item(
 def browse(
     q: str = Query("", max_length=120),
     category: str | None = Query(None, max_length=60),
+    subcategory: str | None = Query(None, max_length=60),
     min_price: float | None = Query(None, ge=0),
     max_price: float | None = Query(None, ge=0),
     condition: list[str] = Query(default_factory=list),
@@ -149,6 +157,7 @@ def browse(
         BrowseFilters(
             q=(q or "").strip(),
             category=category or None,
+            subcategory=subcategory or None,
             min_price=min_price,
             max_price=max_price,
             conditions=tuple(c for c in condition if c),

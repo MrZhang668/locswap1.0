@@ -319,11 +319,12 @@ def test_graph_wiring() -> None:
 def test_three_turns() -> None:
     """只跑 `route_node`，但跑的是真实的那一个。
 
-    桩只有两个，都是这次修复**不该**依赖的东西：卖家的在售列表（一条 SQL）和
-    路由器的模型调用。闸门、挂账、接力全是真的。
+    桩只有三个，都是这次修复**不该**依赖的东西：卖家的在售列表（一条 SQL）、
+    路由器的模型调用，以及查找第二层的模型调用（调用点 I，10-10 加的——
+    「水杯」字面上对不上任何在售商品，于是会问模型）。闸门、挂账、接力全是真的。
     """
     from app.services.agents import graph as graph_mod
-    from app.services.agents import handoff
+    from app.services.agents import handoff, item_lookup
     from app.services.agents import router as router_mod
 
     section("端到端：分析水杯 → 上传 → 上架 → 上传好了")
@@ -350,9 +351,12 @@ def test_three_turns() -> None:
     ]
 
     saved = (graph_mod.nodes._seller_facts, router_mod.route, handoff.ItemRepository)
+    saved_ask = item_lookup.ask_model
     graph_mod.nodes._seller_facts = fake_facts
     router_mod.route = fake_route
     handoff.ItemRepository = _FakeRepo
+    item_lookup.ask_model = lambda ref, message, rows: item_lookup._LookupVerdict(
+        subcategory="水杯水瓶", head_noun="水杯", item_ids=[])
     _FakeRepo.rows = [_FakeItem(1, "蓝牙音箱", parked_at - timedelta(days=9)),
                       _FakeItem(2, "台灯", parked_at - timedelta(days=4))]
     cfg = {"configurable": {"db": None}}
@@ -413,6 +417,7 @@ def test_three_turns() -> None:
               f"{len(_SCRIPTED)} scripted route(s) unused")
     finally:
         graph_mod.nodes._seller_facts, router_mod.route, handoff.ItemRepository = saved
+        item_lookup.ask_model = saved_ask
         _FakeRepo.rows = []
 
 
@@ -567,12 +572,13 @@ def test_form_is_the_answer() -> None:
           "WARN-VAGUE" not in kept and "WARN-CONDITION-UNCLEAR" not in kept, str(kept))
 
     # 三个发出点都要过这道滤网：合规、抽取后的展示、发布回执。
-    graph_src = io.open(
-        "backend/app/services/agents/graph.py", encoding="utf-8"
-    ).read()
-    approve_src = io.open(
-        "backend/app/services/publishing/approve.py", encoding="utf-8"
-    ).read()
+    # 按模块读而不是按路径读：10-10 的目录重构把 agents/graph.py 拆成了包、
+    # publishing 搬进了 agents/，写死的路径从那天起就是错的。
+    from app.services.agents import graph as graph_pkg
+    from app.services.agents.publishing import approve as approve_mod
+
+    graph_src = _bootstrap.module_source(graph_pkg)
+    approve_src = _bootstrap.module_source(approve_mod)
     node = graph_src[graph_src.index("def publish_compliance_node"):
                      graph_src.index("def publish_extract_node")]
     check("合规节点过滤", "publishable_findings" in node)

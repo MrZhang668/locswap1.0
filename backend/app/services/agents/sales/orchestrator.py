@@ -398,6 +398,15 @@ AMBIGUOUS_DEFAULT_NOTE = (
     "让他说一声。不要静默选定，也不要把这句话放到末尾。"
 )
 
+#: 卖家用的叫法和商品标题不一样，是查找那一步（`item_lookup`）认出来的。顾问拿到的
+#: `item_ref` 已经换成了标题，但卖家没看到这一步——不说一句，他会以为助手在答
+#: 另一件东西。
+RESOLVED_ALIAS_NOTE = (
+    "卖家说的{pairs}——是系统按他的在售商品认出来的，他用的叫法和商品标题不一样。"
+    "按这件来做，并在**回复的第一句**用很短的话说明是按哪件看的"
+    "（例如「你说的台灯，我按你在售的「LED护眼书桌灯」来看」）。"
+)
+
 #: 多实体已经解析出来了，逐件执行。和 `MULTI_ITEM_PLAN` 的区别是来源：那条是
 #: 交接场景（卖家上传了几件），这条是本轮指代（卖家说「两个都要」）。
 MULTI_ENTITY_PLAN = (
@@ -843,12 +852,22 @@ def _ambiguity_block(ambiguity: dict, item_refs: list[str]) -> str:
     不了专家这儿）：
 
     * `multi`：多实体解析成功，逐件执行；
-    * `ambiguous` 且被授权/轮次上限逼出了默认方案，那就必须自报家门。
+    * `ambiguous` 且被授权/轮次上限逼出了默认方案，那就必须自报家门；
+    * `resolved`：卖家的叫法和标题不同，是查找认出来的，同样要自报家门。
     """
     kind = str((ambiguity or {}).get("kind") or "")
     names = [str(n) for n in ((ambiguity or {}).get("candidates") or []) if n]
     if kind == "multi" and len(names) > 1:
         return MULTI_ENTITY_PLAN.format(names="、".join(f"「{n}」" for n in names[:5]))
+    if kind == "resolved":
+        pairs = [
+            f"「{a.get('said')}」就是他在售的「{a.get('item')}」"
+            for a in ((ambiguity or {}).get("aliases") or [])
+            if a.get("said") and a.get("item")
+        ]
+        if pairs:
+            return RESOLVED_ALIAS_NOTE.format(pairs="；".join(pairs[:5]))
+        return ""
     if kind == "ambiguous" and len(names) > 1:
         chosen = (item_refs or names)[0]
         others = "、".join(f"「{n}」" for n in names if n != chosen)

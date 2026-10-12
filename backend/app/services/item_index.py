@@ -42,6 +42,14 @@ INDEX_TEXT_FIELDS = (
 )
 #: Fields that must never enter the index
 FORBIDDEN_INDEX_FIELDS = ("seller_id", "seller", "email", "password_hash", "user_id", "phone", "contact")
+#: **不进索引文本**（也就不进向量）的属性。
+#:
+#: 不是隐私问题，是范围问题：它们一旦进了索引文档，每一件商品的向量都会变，
+#: 买家检索的评测基线也就跟着变。子类目另外以**过滤字段**的身份进了 metadata
+#: 和检索镜像（`build_index_metadata` / `IndexedItem.subcategory`）——那不改变
+#: 任何向量，只是让以后的硬过滤有东西可用。要让它们影响语义检索时，删掉这一行、
+#: 重建索引、重跑检索评测，三件事一起做。
+SELLER_ONLY_FIELDS = ("subcategory", "head_noun")
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 
@@ -60,6 +68,7 @@ class IndexedItem:
     lng: float
     pickup_location_name: str
     category: str | None = None
+    subcategory: str | None = None
     brand: str | None = None
     color: str | None = None
     condition: str | None = None
@@ -87,7 +96,7 @@ def build_index_document(item: Item) -> str:
         if value:
             parts.append(str(value).strip())
     for key, value in (item.attributes or {}).items():
-        if key in FORBIDDEN_INDEX_FIELDS or key in INDEX_TEXT_FIELDS:
+        if key in FORBIDDEN_INDEX_FIELDS or key in INDEX_TEXT_FIELDS or key in SELLER_ONLY_FIELDS:
             continue
         if value is None or value == "":
             continue
@@ -110,6 +119,8 @@ def build_index_metadata(item: Item) -> dict[str, Any]:
         "lat": float(item.lat),
         "lng": float(item.lng),
         "category": _attr(item, "category") or "",
+        # 和 category 一样用空串表示没有：Chroma 的 metadata 不收 None。
+        "subcategory": _attr(item, "subcategory") or "",
     }
 
 
@@ -125,13 +136,16 @@ def build_indexed_item(item: Item) -> IndexedItem:
         lng=float(item.lng),
         pickup_location_name=item.pickup_location_name or "",
         category=_attr(item, "category"),
+        subcategory=_attr(item, "subcategory"),
         brand=_attr(item, "brand"),
         color=_attr(item, "color"),
         condition=_attr(item, "condition"),
         extra_attributes={
             k: v
             for k, v in (item.attributes or {}).items()
-            if k not in ("category", "brand", "color", "condition") and k not in FORBIDDEN_INDEX_FIELDS
+            if k not in ("category", "brand", "color", "condition")
+            and k not in FORBIDDEN_INDEX_FIELDS
+            and k not in SELLER_ONLY_FIELDS
         },
     )
     rec.name_tokens = raw_tokens(rec.name)

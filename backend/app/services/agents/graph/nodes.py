@@ -24,7 +24,7 @@ from ...prompts import load_prompt
 from ..sales.schemas import AdvisorChatTurn
 from ...llm.langchain_client import llm_configured
 from ...nlp import intent_rules
-from .. import defer_intent, handoff
+from .. import defer_intent, handoff, item_lookup
 from .. import proposals as prop
 from .. import router as router_mod
 from .state import AdvisorState
@@ -54,6 +54,12 @@ def _db(config: RunnableConfig) -> Session:
     return config["configurable"]["db"]
 
 
+#: 一个卖家最多带这么多件在售商品进这一轮。以前是 10，于是第 11 件以后的东西
+#: 无论怎么问都是「没找到」。路由器的提示词里仍然只放前 10 件（`router._facts_block`），
+#: 这里放宽的是**查找**能看到的范围。
+MAX_SELLER_LISTINGS = 100
+
+
 def _seller_facts(db: Session, seller_id: int) -> tuple[bool, list[dict]]:
     """The one SQL fact the router is not allowed to guess at."""
     active = [
@@ -66,8 +72,11 @@ def _seller_facts(db: Session, seller_id: int) -> tuple[bool, list[dict]]:
             "name": (i.name or "")[:60],
             "price": float(i.price),
             "category": (i.attributes or {}).get("category"),
+            # 查找用：「卖家点名的东西是哪一件」先比中心词，再按子类目过滤。
+            "subcategory": (i.attributes or {}).get("subcategory"),
+            "head_noun": (i.attributes or {}).get("head_noun"),
         }
-        for i in active[:10]
+        for i in active[:MAX_SELLER_LISTINGS]
     ]
     return bool(active), listings
 
@@ -225,13 +234,12 @@ def route_node(state: AdvisorState, config: RunnableConfig) -> dict[str, Any]:
         # 东西在不在库里。在库 → 直接收进隐身并排计划（`defer_sale`）；不在库 →
         # 先得有这件东西，所以走上架，而「以后再卖」这个诉求挂起来等它回来。
         #
-        # 这个判断没有交给模型：`name_matches` 是后端对卖家自己那几行做的分词比对，
-        # 是事实不是推断。让模型去读它，只是多一次掷硬币的机会。
+        # 这个判断没有交给路由模型，见 `router.defer_item_in_stock`。
         if (
             route == "defer_sale"
             and hints.get("defer_sale_intent")
-            and not hints.get("name_matches")
             and not hints.get("wants_reminder")
+            and not router_mod.defer_item_in_stock(slots, hints, listings, state["message"])
         ):
             logger.info("[defer] nothing listed under that name; listing first")
             route, scenario = "publishing_agent", "none"
@@ -326,9 +334,28 @@ def route_node(state: AdvisorState, config: RunnableConfig) -> dict[str, Any]:
     # 是 `sales_agent`，顾问在回复里写一句「请先上架」就算办完了——话对，但没有
     # 任何东西被记下来，卖家上架完回来只能被重新问一遍想做什么。
     refs = item_refs_override or ([slots["item_ref"]] if slots.get("item_ref") else [])
-    route, missing_items = router_mod.apply_missing_item_gate(
-        route, slots, refs, hints, listings, bool(state.get("photo_path"))
+    # 卖家点名的东西是他的哪一件：中心词 → 模型 + 子类目。只在闸门要看的轮次查。
+    to_resolve = router_mod.needs_item_resolution(
+        route, slots, refs, hints, bool(state.get("photo_path"))
     )
+    resolution = (
+        item_lookup.resolve_refs(to_resolve, listings, message=state["message"])
+        if to_resolve else {}
+    )
+    route, missing_items = router_mod.apply_missing_item_gate(
+        route, slots, refs, hints, listings, bool(state.get("photo_path")),
+        resolution=resolution or None,
+    )
+    if route == "sales_agent" and resolution:
+        # 找到了：把卖家的叫法换成那件商品的标题再交给顾问。不换的话，顾问拿着
+        # 「台灯」去对一张写着「LED护眼书桌灯」的清单，会把刚找到的东西再说成没有。
+        bound, aliases = item_lookup.bind(to_resolve, resolution)
+        if bound != to_resolve:
+            logger.info("[item-lookup] bound %s -> %s", to_resolve, bound)
+            refs = bound
+            slots = {**slots, "item_ref": bound[0][:120]}
+        if aliases and not ambiguity:
+            ambiguity = {"kind": "resolved", "aliases": aliases}
 
     # ---- 上架是有终点的 ----------------------------------------------------
     # 一句光秃秃的「上传好了」不是商品描述。草稿箱空着、这一轮也没带照片时，
@@ -861,21 +888,47 @@ def _resolve_for_status(
             return None, "你名下没有暂停中的商品，没有可以恢复上架的东西。"
         return None, "你现在没有在售的商品，没有可以下架的东西。"
 
-    listings = [{"item_id": i.id, "name": (i.name or "")[:60]} for i in rows]
+    listings = [
+        {"item_id": i.id, "name": (i.name or "")[:60],
+         "category": (i.attributes or {}).get("category"),
+         "subcategory": (i.attributes or {}).get("subcategory"),
+         "head_noun": (i.attributes or {}).get("head_noun")}
+        for i in rows
+    ]
     by_id = {int(i.id): i for i in rows}
+    verb = "恢复上架" if target == "resume" else "下架"
 
-    # The seller's own words for the item first, then the raw message. The
-    # rewritten query is skipped on purpose: it is the router's paraphrase, and
-    # a paraphrase that substituted a listing name would bind the match to a
-    # word the seller never said.
-    for text in (str((state.get("slots") or {}).get("item_ref") or ""), state["message"]):
-        matches = intent_rules.match_listings(text, listings) if text else []
-        winner = intent_rules.best_match(matches)
-        if winner is not None:
-            return by_id[int(winner["item_id"])], ""
-        if matches:
-            names = "、".join(f"「{m['name']}」" for m in matches)
-            return None, f"你是说 {names} 里的哪一件？说一下名字我就帮你处理。"
+    def which(matches: list[dict]) -> str:
+        names = "、".join(f"「{m['name']}」" for m in matches)
+        return f"你是说 {names} 里的哪一件？说一下名字我就帮你处理。"
+
+    # The seller's own words for the item first (`item_ref`), resolved the same
+    # way the advisor resolves them: head noun, then the model with the
+    # subcategory checked server-side. Token overlap used to bind 「把自行车反光灯
+    # 下架」 to the bike. The rewritten query is skipped on purpose: it is the
+    # router's paraphrase, and a paraphrase that substituted a listing name would
+    # bind the match to a word the seller never said.
+    ref = str((state.get("slots") or {}).get("item_ref") or "").strip()
+    if ref:
+        found = item_lookup.resolve_ref(ref, listings, message=state["message"])
+        if found.decided:
+            if len(found.matches) == 1:
+                return by_id[int(found.matches[0]["item_id"])], ""
+            if found.matches:
+                return None, which(found.matches)
+            # He named it and it is not there. Saying so beats the fallbacks
+            # below: "the only item you have" is a guess about a pronoun, not
+            # about a name he just said.
+            names = "、".join(f"「{(i.name or '')[:30]}」" for i in rows[:6])
+            return None, f"没找到你说的「{ref}」。我这边能{verb}的是：{names}。"
+
+    # No usable name (none given, a pronoun, or the lookup could not decide):
+    # the message itself, cut into noun phrases so a modifier cannot bind.
+    matches = item_lookup.message_matches(state["message"], listings)
+    if len(matches) == 1:
+        return by_id[int(matches[0]["item_id"])], ""
+    if matches:
+        return None, which(matches)
 
     last = state.get("last_context") or {}
     if last.get("item_id") and int(last["item_id"]) in by_id:
@@ -885,7 +938,6 @@ def _resolve_for_status(
         return by_id[int(rows[0].id)], ""
 
     names = "、".join(f"「{(i.name or '')[:30]}」" for i in rows[:6])
-    verb = "恢复上架" if target == "resume" else "下架"
     return None, f"你想{verb}哪一件？我这边能看到：{names}。"
 
 
@@ -1007,8 +1059,15 @@ def _deterministic_plan_node(state: AdvisorState, config: RunnableConfig) -> dic
     # ---- 哪件东西 ----
     item_name = str(slots.get("item_ref") or "").strip()
     item_id = None
-    matches = hints.get("name_matches") or []
-    winner = intent_rules.best_match(matches) if matches else None
+    # 只走第一层（这条路的前提就是没有模型可调），且只认唯一命中。以前用的是整条
+    # 消息的分词（`name_matches`），「自行车反光灯期末再卖」会把计划挂到那辆自行车
+    # 上，周扫描于是一直报自行车的数字。
+    listings = list(state.get("listings") or [])
+    if item_name:
+        matches, _ = item_lookup.lexical_matches(item_name, listings)
+    else:
+        matches = item_lookup.message_matches(message, listings)
+    winner = matches[0] if len(matches) == 1 else None
     if winner is not None:
         # 名字对上了一件在售商品：计划挂到它身上，卖家想先下架再等也说得通。
         item_name = item_name or str(winner.get("name") or "")
@@ -1243,6 +1302,8 @@ def publish_extract_node(state: AdvisorState, config: RunnableConfig) -> dict[st
         "summary": draft.summary,
         "description": draft.description,
         "category": attrs.category,
+        "subcategory": attrs.subcategory,
+        "head_noun": attrs.head_noun,
         "brand": attrs.brand,
         "condition": attrs.condition,
         "color": attrs.color,

@@ -705,6 +705,147 @@ CONDITION_DICT: dict[str, list[str]] = {
 }
 
 # ------------------------------------------------------------
+# 子类目（2026-10-10）。挂在 9 个大类下面，一共 42 个具名子类目，每个大类另有
+# 一个「其他…」兜底，存进 items.attributes.subcategory。
+#
+# 粒度是按需求分析的桶大小定的，不是按「分得越细越好」：最小的两个大类只有
+# 27 / 40 件，拆到上百个子类目会让大多数桶过不了 k-匿名门槛。比子类目更细的
+# 那一层（台灯 vs 落地灯）由 attributes.head_noun 承担，不在这里。
+#
+# 每个子类目**只属于一个大类**，名字全局唯一——这是刻意的：一件东西的大类由它
+# 的子类目推出来，不会出现「灯具」在两个大类下各有一个桶的情况。为此迁移时
+# 改过 6 件商品的大类：3 件落地灯、2 件桌面收纳（→ 家居与厨房）、1 件地毯
+# （→ 家具与电器），见 scripts/backfill_subcategory.py。
+#
+# 每一项后面的说明会原样进提示词，是给模型分类用的例子，不是同义词表。
+# ------------------------------------------------------------
+SUBCATEGORY_TREE: dict[str, list[tuple[str, str]]] = {
+    "电子产品": [
+        ("电脑与平板", "笔记本电脑、平板、显示器、键盘、鼠标、绘图板、电子阅读器"),
+        ("手机与穿戴", "手机、智能手表、手环"),
+        ("音频设备", "耳机、音箱、麦克风"),
+        ("游戏设备", "游戏机、手柄"),
+        ("充电与线材", "充电器、充电宝、转换器、扩展坞、数据线"),
+        ("摄影与投影", "相机、摄像头、投影仪"),
+        ("网络与存储", "路由器、硬盘、U 盘"),
+    ],
+    "家居与厨房": [
+        ("厨房小电器", "空气炸锅、电饭煲、压力锅、咖啡机、搅拌机、电水壶"),
+        ("锅具餐具", "炒锅、不粘锅、餐具、刀具"),
+        ("水杯水瓶", "保温杯、水瓶、杯子"),
+        ("收纳整理", "收纳箱、收纳篮、置物架、衣架"),
+        ("床品布艺", "被子、枕头、盖毯、窗帘"),
+        ("灯具与装饰", "台灯、落地灯、串灯、装饰画"),
+    ],
+    "家具与电器": [
+        ("桌椅", "书桌、办公椅、餐桌"),
+        ("沙发与床", "沙发、沙发床、床架、床垫"),
+        ("柜架", "书架、斗柜、衣柜"),
+        ("冰箱与微波炉", "小冰箱、微波炉"),
+        ("清洁与环境电器", "吸尘器、加湿器、取暖器、电风扇"),
+        ("镜子与地毯", "全身镜、地毯"),
+    ],
+    "图书与教材": [
+        ("教材课本", "课程教材、课本"),
+        ("练习与备考", "练习册、习题集、真题、学习指南"),
+        ("工具书", "词典、手册、速查表"),
+        ("课外读物", "小说、杂志、教材以外的图书"),
+    ],
+    "服装与鞋靴": [
+        ("上衣", "衬衫、T 恤、卫衣、毛衣"),
+        ("裤装与裙装", "牛仔裤、运动裤、半身裙、连衣裙"),
+        ("外套", "夹克、羽绒服、大衣、冲锋衣、雨衣"),
+        ("鞋靴", "运动鞋、跑鞋、靴子"),
+        ("包袋", "双肩包、托特包、电脑包、行李箱"),
+        ("配饰", "围巾、帽子、手套"),
+    ],
+    "运动与户外": [
+        ("球类与球拍", "篮球、足球、橄榄球、网球拍、羽毛球拍"),
+        ("健身器材", "哑铃、壶铃、瑜伽垫、跳绳、弹力带"),
+        ("露营户外", "帐篷、睡袋、登山包、露营椅"),
+        ("滑板轮滑", "滑板、长板、轮滑鞋"),
+    ],
+    "学习用品": [
+        ("计算器", "科学计算器、图形计算器"),
+        ("书写与纸品", "笔、纸质笔记本、活页夹、便利贴、计划本"),
+        ("画材与白板", "画板、颜料、白板"),
+    ],
+    "自行车与滑板车": [
+        ("自行车", "公路车、山地车、折叠车、通勤车"),
+        ("滑板车", "电动滑板车、脚踏滑板车"),
+        ("骑行配件", "头盔、车锁、打气筒、车灯、反光灯、货架"),
+    ],
+    "乐器": [
+        ("弦乐器", "吉他、尤克里里、小提琴、贝斯"),
+        ("键盘乐器", "电钢琴、电子琴、MIDI 键盘"),
+        ("管乐与打击乐", "长笛、口琴、电鼓"),
+    ],
+}
+
+
+def other_subcategory(category: str) -> str:
+    """每个大类的兜底子类目。模型拿不准时放这里，而不是硬塞进一个错的桶。"""
+    return f"其他{category}"
+
+
+#: 子类目 -> 大类。包含每个大类的「其他…」。
+SUBCATEGORY_PARENT: dict[str, str] = {
+    **{sub: cat for cat, subs in SUBCATEGORY_TREE.items() for sub, _ in subs},
+    **{other_subcategory(cat): cat for cat in SUBCATEGORY_TREE},
+}
+
+#: 每个大类可选的子类目，「其他…」排在最后。下拉框和校验都读它。
+SUBCATEGORIES_BY_CATEGORY: dict[str, list[str]] = {
+    cat: [sub for sub, _ in subs] + [other_subcategory(cat)]
+    for cat, subs in SUBCATEGORY_TREE.items()
+}
+
+assert set(SUBCATEGORY_TREE) == set(CATEGORY_DICT), "every category needs a subcategory list"
+assert sum(len(s) for s in SUBCATEGORY_TREE.values()) == 42
+assert len(SUBCATEGORY_PARENT) == 42 + len(SUBCATEGORY_TREE), "subcategory names must be unique"
+
+
+def subcategory_prompt_block() -> str:
+    """类目树的文本形式，给抽取和查找两处提示词共用——两边必须看到同一张表。"""
+    lines: list[str] = []
+    for cat, subs in SUBCATEGORY_TREE.items():
+        lines.append(f"- {cat}")
+        for sub, examples in subs:
+            lines.append(f"  - {sub}：{examples}")
+        lines.append(f"  - {other_subcategory(cat)}：上面都放不下时用")
+    return "\n".join(lines)
+
+
+def valid_subcategory(category: str | None, subcategory: str | None) -> str | None:
+    """`subcategory` 属于 `category` 时原样返回，否则 None。"""
+    if not category or not subcategory:
+        return None
+    return subcategory if SUBCATEGORY_PARENT.get(subcategory) == category else None
+
+
+#: 中心词至少两个字。单字（「灯」「包」「车」）太泛：它会以后缀关系匹配上同一
+#: 字结尾的所有东西，于是「反光灯」会认领一件中心词只写了「灯」的台灯。
+MIN_HEAD_NOUN_CHARS = 2
+
+
+def valid_head_noun(name: str | None, head_noun: str | None) -> str | None:
+    """中心词必须原样出现在标题里，否则 None。
+
+    这条不变量是为了**跟得上标题的修改**：卖家在草稿表里改了标题，模型当初抽出
+    的中心词可能已经不在里面了。在标题里找得到，就还是这件东西的中心词；找不到，
+    宁可不存——查找时会退回按标题分词比对，而一个过期的中心词会让这件商品被
+    当成另一种东西。
+    """
+    h = (head_noun or "").strip()
+    lowered = (name or "").lower()
+    # 模型有时会把中心词补全成标题里没有的写法（标题「手柄」，它说「游戏手柄」）。
+    # 中文复合名词的中心在后面，所以退到标题里找得到的最长后缀——后缀仍然是中心。
+    for start in range(0, len(h) - MIN_HEAD_NOUN_CHARS + 1):
+        if h[start:].lower() in lowered:
+            return h[start:]
+    return None
+
+# ------------------------------------------------------------
 # Legacy value mapping. The corpus, the vector index and these dictionaries were
 # English until the 2026-09-15 localization. Rows written before the switch (and
 # any old export replayed into the DB) still carry the English canonical values,

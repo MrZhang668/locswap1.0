@@ -8,7 +8,8 @@ editing after review, which is the one thing a reviewer must not be.
 
 Everything the client sends is treated as a proposal:
 * category, condition and pickup location are checked against their whitelists
-  rather than trusted;
+  rather than trusted; a subcategory that does not belong to the category falls
+  back to that category's 「其他…」 rather than failing the listing;
 * seller, status and timestamps are set here and are not part of the payload at
   all — there is no field for a client to put them in;
 * a block verdict refuses the write and returns the rules it hit, so the seller
@@ -23,7 +24,7 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from ....config import LOCATION_BY_NAME
+from ....config import LOCATION_BY_NAME, other_subcategory, valid_head_noun, valid_subcategory
 from ....models import ItemStatus, User
 from ....repositories import StatusLogRepository
 from ...item_index import ItemIndexService
@@ -105,14 +106,21 @@ def approve_listing(
     status = ItemStatus.PAUSED if hold else ItemStatus.SELLING
 
     summary = payload.summary.strip() or clip_sentences(payload.description, 2)[:120]
+    name = payload.name.strip()[:40]
     item = index.create_item(
         db,
         seller_id=user.id,
-        name=payload.name.strip()[:40],
+        name=name,
         description=payload.description.strip(),
         summary=summary[:120],
         attributes={
             "category": payload.category,
+            # 卖家可能在表里换了大类而子类目还是旧的——那就不是这个大类的子类目，
+            # 落到兜底。不拒绝：子类目错了只影响查找，不该挡住一次发布。
+            "subcategory": valid_subcategory(payload.category, payload.subcategory)
+            or other_subcategory(payload.category),
+            # 判的是**最终标题**：草稿之后卖家可能改过它。
+            "head_noun": valid_head_noun(name, payload.head_noun),
             "brand": payload.brand or None,
             "condition": payload.condition,
             "color": payload.color or None,

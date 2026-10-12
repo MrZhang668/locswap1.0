@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ....config import CATEGORY_DICT, CONDITION_DICT
+from ....config import CATEGORY_DICT, CONDITION_DICT, valid_subcategory
 from ...images import check_upload_path
 from ...text import scrub_pii
 
@@ -34,6 +34,7 @@ FIELD_LABELS_ZH: dict[str, str] = {
     "summary": "一句话摘要",
     "description": "描述",
     "category": "类别",
+    "subcategory": "子类目",
     "brand": "品牌",
     "condition": "成色",
     "color": "颜色",
@@ -94,6 +95,11 @@ class DraftAttributes(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     category: str | None = None
+    #: 必须是 `category` 下面的子类目，否则丢掉（同样只花卖家一次下拉选择）。
+    subcategory: str | None = None
+    #: 标题里那个「这是什么东西」的词。不给卖家看，跟着草稿走到发布那一步；
+    #: 是否仍在标题里由 approve 再判一次。
+    head_noun: str | None = Field(default=None, max_length=20)
     brand: str | None = None
     condition: str | None = None
     color: str | None = None
@@ -111,6 +117,11 @@ class DraftAttributes(BaseModel):
     @classmethod
     def _known_condition(cls, v: str | None) -> str | None:
         return v if v in CONDITIONS else None
+
+    @model_validator(mode="after")
+    def _subcategory_under_category(self) -> "DraftAttributes":
+        self.subcategory = valid_subcategory(self.category, self.subcategory)
+        return self
 
 
 class ListingDraft(BaseModel):
@@ -158,6 +169,8 @@ class PublishDraftView(BaseModel):
     summary: str = ""
     description: str = ""
     category: str | None = None
+    subcategory: str | None = None
+    head_noun: str | None = None
     brand: str | None = None
     condition: str | None = None
     color: str | None = None
@@ -181,6 +194,11 @@ class PublishApproveIn(BaseModel):
     summary: str = Field(default="", max_length=120)
     description: str = Field(min_length=1, max_length=600)
     category: str = Field(min_length=1, max_length=40)
+    #: 可以不给：旧前端、脚本和夹具都不带它。不给或不属于 `category` 时，
+    #: approve 落到该大类的「其他…」。
+    subcategory: str | None = Field(default=None, max_length=40)
+    #: 抽取时得到的中心词，前端原样带回。不在最终标题里就不存。
+    head_noun: str | None = Field(default=None, max_length=20)
     condition: str = Field(min_length=1, max_length=20)
     brand: str | None = Field(default=None, max_length=40)
     color: str | None = Field(default=None, max_length=30)

@@ -17,6 +17,8 @@
   "description": string,     // 2-4 句（不超过 300 个汉字）。只写照片上能看到的和卖家说过的
   "attributes": {
     "category": string|null,   // 严格取自下面的固定类别，或者 null
+    "subcategory": string|null,// 严格取自下面类目树里 category 底下的子类目；放不下就用该类的「其他…」；category 为 null 时也为 null
+    "head_noun": string|null,  // 中心词：标题里说明「这是什么东西」的那个词，见下面的规则
     "brand": string|null,      // 仅当照片上可见或卖家写明时才填，保留品牌原本的拼写（Apple、IKEA）
     "condition": string|null,  // 严格是以下之一：全新 / 几乎全新 / 成色很好 / 成色良好 / 成色一般
     "color": string|null,      // 主色，用规范写法，如 "白色"
@@ -29,6 +31,17 @@
 ```
 
 固定类别：`电子产品`、`自行车与滑板车`、`家具与电器`、`图书与教材`、`服装与鞋靴`、`运动与户外`、`家居与厨房`、`乐器`、`学习用品`
+
+类目树（大类 → 子类目：例子）：
+
+{{SUBCATEGORY_TREE}}
+
+**中心词（`head_noun`）怎么取：**
+
+- 它是标题里回答「这是什么东西」的那个词，**必须原样出现在 `name` 里**。去掉品牌、颜色、型号、尺寸、成色这些修饰。
+- 取能把它和同一子类目里别的东西区分开的那一级：`白色LED阅读落地灯` → `落地灯`（不是 `灯`），`Logitech 104键机械键盘` → `机械键盘`，`Giant白色通勤自行车` → `自行车`。
+- 中文复合名词的中心在**后面**：`自行车头盔` 是头盔，不是自行车；`耳机架` 是架子，不是耳机。
+- 至少两个字。标题里找不到合适的词就填 `null`。
 
 # 硬性规则
 
@@ -48,11 +61,11 @@
 输入：一张白色机械键盘的照片；卖家写了"用了一年，手感还行，键帽有点打油"
 
 ```
-{"name":"白色 87 键机械键盘","summary":"白色 87 键机械键盘，使用约一年，键帽略有打油。","description":"白色紧凑型机械键盘，大致为 87 键配列，白色键帽。卖家说明使用了约一年，键帽有轻微打油。照片中未见数据线和包装盒。","attributes":{"category":"电子产品","brand":null,"condition":"成色良好","color":"白色","material":null,"size":"87 键"},"missing_fields":["brand"],"follow_up_question":"这个键盘的品牌或型号知道吗？"}
+{"name":"白色 87 键机械键盘","summary":"白色 87 键机械键盘，使用约一年，键帽略有打油。","description":"白色紧凑型机械键盘，大致为 87 键配列，白色键帽。卖家说明使用了约一年，键帽有轻微打油。照片中未见数据线和包装盒。","attributes":{"category":"电子产品","subcategory":"电脑与平板","head_noun":"机械键盘","brand":null,"condition":"成色良好","color":"白色","material":null,"size":"87 键"},"missing_fields":["brand"],"follow_up_question":"这个键盘的品牌或型号知道吗？"}
 ```
 
 输入：一张靠墙停着的深色自行车照片；卖家写了"出个自行车"
 
 ```
-{"name":"自行车","summary":"二手自行车，具体信息待确认。","description":"一辆深色车架的自行车，靠墙拍摄。照片中看不清品牌标识、配件和磨损情况，卖家也没有描述车况。","attributes":{"category":"自行车与滑板车","brand":null,"condition":null,"color":"黑色","material":null,"size":null},"missing_fields":["brand","condition","size"],"follow_up_question":"这辆车什么车况——骑了多久，有没有哪里磨损或者坏掉？"}
+{"name":"自行车","summary":"二手自行车，具体信息待确认。","description":"一辆深色车架的自行车，靠墙拍摄。照片中看不清品牌标识、配件和磨损情况，卖家也没有描述车况。","attributes":{"category":"自行车与滑板车","subcategory":"自行车","head_noun":"自行车","brand":null,"condition":null,"color":"黑色","material":null,"size":null},"missing_fields":["brand","condition","size"],"follow_up_question":"这辆车什么车况——骑了多久，有没有哪里磨损或者坏掉？"}
 ```

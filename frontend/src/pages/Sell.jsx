@@ -5,7 +5,7 @@ import { Countdown, Modal, Toast, useAsync } from '../components/common'
 
 const EMPTY = {
   name: '', description: '', summary: '', price: '',
-  category: '', brand: '', condition: '', color: '',
+  category: '', subcategory: '', brand: '', condition: '', color: '',
   location: '', timeStart: '', timeEnd: '',
 }
 
@@ -304,6 +304,16 @@ function ProductInfo({ config, onListed }) {
   const [tip, setTip] = useState({ text: '', tone: 'info' })
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+  // 换了大类就清掉子类目：旧的那个不属于新的大类。
+  const setCategory = (e) => {
+    const category = e.target.value
+    setForm((f) => ({
+      ...f,
+      category,
+      subcategory: (config?.subcategories?.[category] ?? []).includes(f.subcategory) ? f.subcategory : '',
+    }))
+  }
+  const subOptions = config?.subcategories?.[form.category] ?? []
 
   const pickPhoto = async (e) => {
     const file = e.target.files?.[0]
@@ -338,6 +348,7 @@ function ProductInfo({ config, onListed }) {
         summary: form.summary || null,
         attributes: {
           category: form.category || null,
+          subcategory: form.subcategory || null,
           brand: form.brand || null,
           condition: form.condition || null,
           color: form.color || null,
@@ -401,11 +412,21 @@ function ProductInfo({ config, onListed }) {
           <div className="row">
             <div className="field" style={{ flex: 1 }}>
               <label>类别 · 必填</label>
-              <select className="input" value={form.category} onChange={set('category')} required>
+              <select className="input" value={form.category} onChange={setCategory} required>
                 <option value="">请选择</option>
                 {(config?.categories ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
+            <div className="field" style={{ flex: 1 }}>
+              <label>子类目</label>
+              <select className="input" value={form.subcategory} onChange={set('subcategory')}
+                      disabled={!subOptions.length}>
+                <option value="">{form.category ? '不确定就留空' : '先选类别'}</option>
+                {subOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="row">
             <div className="field" style={{ flex: 1 }}>
               <label>成色 · 必填</label>
               <select className="input" value={form.condition} onChange={set('condition')} required>

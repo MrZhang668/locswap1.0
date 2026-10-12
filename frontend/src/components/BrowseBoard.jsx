@@ -38,6 +38,7 @@ const PAGE = 24
 const EMPTY_QUERY = {
   q: '',
   category: '',
+  subcategory: '',
   min_price: '',
   max_price: '',
   conditions: [],
@@ -46,7 +47,7 @@ const EMPTY_QUERY = {
 }
 
 const isDefault = (query) =>
-  !query.q && !query.category && query.min_price === '' && query.max_price === ''
+  !query.q && !query.category && !query.subcategory && query.min_price === '' && query.max_price === ''
   && query.conditions.length === 0 && query.max_distance_km === '' && query.sort === 'newest'
 
 export default function BrowseBoard({ config, onChanged, onCategoryChange, requireAccount }) {
@@ -91,6 +92,7 @@ export default function BrowseBoard({ config, onChanged, onCategoryChange, requi
       .browse({
         q: query.q,
         category: query.category,
+        subcategory: query.subcategory,
         min_price: query.min_price,
         max_price: query.max_price,
         condition: query.conditions,
@@ -159,9 +161,24 @@ export default function BrowseBoard({ config, onChanged, onCategoryChange, requi
         <div className="fb-field">
           <label htmlFor="fb-cat">类别</label>
           <select id="fb-cat" className="input" value={query.category}
-                  onChange={(e) => { update({ category: e.target.value }); onCategoryChange?.(e.target.value || null) }}>
+                  onChange={(e) => {
+                    // 换大类就清掉子类目：旧的那个不属于新的大类，留着只会筛出空板。
+                    update({ category: e.target.value, subcategory: '' })
+                    onCategoryChange?.(e.target.value || null)
+                  }}>
             <option value="">全部</option>
             {(config?.categories ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+
+        <div className="fb-field">
+          <label htmlFor="fb-sub">子类目</label>
+          <select id="fb-sub" className="input" value={query.subcategory}
+                  disabled={!query.category}
+                  title={query.category ? undefined : '先选一个类别'}
+                  onChange={(e) => update({ subcategory: e.target.value })}>
+            <option value="">全部</option>
+            {(config?.subcategories?.[query.category] ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
 

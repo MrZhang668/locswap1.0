@@ -747,6 +747,7 @@ function PublishDraftCard({ draft, config, onPublished }) {
     summary: draft.summary || '',
     description: draft.description || '',
     category: draft.category || '',
+    subcategory: draft.subcategory || '',
     condition: draft.condition || '',
     brand: draft.brand || '',
     color: draft.color || '',
@@ -761,6 +762,16 @@ function PublishDraftCard({ draft, config, onPublished }) {
   const [findings, setFindings] = useState([])
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+  // 换了大类，原来的子类目就不属于它了——清掉让卖家重选，而不是带着一个对不上的值提交。
+  const setCategory = (e) => {
+    const category = e.target.value
+    setForm((f) => ({
+      ...f,
+      category,
+      subcategory: (config?.subcategories?.[category] ?? []).includes(f.subcategory) ? f.subcategory : '',
+    }))
+  }
+  const subOptions = config?.subcategories?.[form.category] ?? []
 
   if (done) {
     return (
@@ -787,6 +798,9 @@ function PublishDraftCard({ draft, config, onPublished }) {
         summary: form.summary.trim(),
         description: form.description.trim(),
         category: form.category,
+        subcategory: form.subcategory || null,
+        // 不给卖家看也不让他改；后端会核对它还在不在最终标题里。
+        head_noun: draft.head_noun || null,
         condition: form.condition,
         brand: form.brand || null,
         color: form.color || null,
@@ -834,11 +848,21 @@ function PublishDraftCard({ draft, config, onPublished }) {
       <div className="row">
         <div className="field" style={{ flex: 1 }}>
           <label className="mini">类别 · 必填</label>
-          <select className="input" value={form.category} onChange={set('category')}>
+          <select className="input" value={form.category} onChange={setCategory}>
             <option value="">请选择</option>
             {(config?.categories ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
+        <div className="field" style={{ flex: 1 }}>
+          <label className="mini">子类目</label>
+          <select className="input" value={form.subcategory} onChange={set('subcategory')}
+                  disabled={!subOptions.length}>
+            <option value="">{form.category ? '不确定就留空' : '先选类别'}</option>
+            {subOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="row">
         <div className="field" style={{ flex: 1 }}>
           <label className="mini">成色 · 必填</label>
           <select className="input" value={form.condition} onChange={set('condition')}>

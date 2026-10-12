@@ -27,7 +27,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from ....config import settings
+from ....config import settings, subcategory_prompt_block
 from ....models import ListingRule, RuleSeverity
 from ...llm.langchain_client import build_chat_model, record_usage
 from ...images import to_base64_source
@@ -197,7 +197,11 @@ def extract_listing(
     body = f"<submission>\n{text.strip() or '（卖家没有填写文字）'}\n</submission>"
     parsed, in_tok, out_tok = _invoke_json(
         call_site=CALL_SITE_EXTRACT,
-        system=load_prompt("publishing_extract"),
+        # 类目树从 config 填进来，不在 .md 里手抄一份：查找那边的提示词读的是
+        # 同一个函数，两边看到的必须是同一张表。
+        system=load_prompt("publishing_extract").replace(
+            "{{SUBCATEGORY_TREE}}", subcategory_prompt_block()
+        ),
         text=body,
         photo_path=photo_path,
         schema=ListingDraft,

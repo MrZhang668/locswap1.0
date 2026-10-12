@@ -369,6 +369,10 @@ def _content_tokens(text: str) -> set[str]:
     }
 
 
+#: 给 `agents.item_lookup` 用的公开名字：两边必须用同一套「什么词算数」。
+content_tokens = _content_tokens
+
+
 def match_listings(message: str, listings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Which of the seller's own listings this message is talking about.
 

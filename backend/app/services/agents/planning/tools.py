@@ -35,6 +35,7 @@ from ....models import Item, ItemStatus, NotificationType, SalePlan, SalePlanSta
 from ....repositories import ItemRepository
 from ... import sale_plans as plan_service
 from ...nlp import intent_rules
+from .. import item_lookup
 from ..sales.tools import ToolError
 from .schemas import (
     CancelSalePlanInput,
@@ -355,21 +356,31 @@ def create_sale_plan(
 
 
 def _match_listing(db: Session, seller_id: int, name: str) -> int | None:
-    """这个名字是不是指向一件已经在售的商品。
+    """这个名字是不是指向一件已经在售的商品——**只在唯一命中时**返回它。
 
-    用的是 `intent_rules` 那套 token 重合 + 严格占优，不是子串包含——「桌」会命中
-    「桌面麦克风」，而把计划挂到错的商品上，周扫描就会一直报另一件东西的数字。
+    这个返回值后面跟着一次写：绑上了，`_hide_for_plan` 就把那件商品收进隐身，中间
+    没有确认这一步。所以它用的是 `item_lookup`（中心词 → 模型 + 子类目过滤），不再
+    是分词重合：「自行车反光灯期末再卖」和「Giant白色通勤自行车」重合了「自行车」，
+    旧判据会把那辆自行车从搜索里收掉。
+
+    判不出来（模型调不通）或对上不止一件，一律不绑：最坏是计划只按名字盯着，
+    而绑错的代价是一件卖家没说要收的东西消失了。
     """
     # PLANNABLE 而不是 SEARCHABLE：一件**已经被收起来**的商品仍然是计划的对象——
     # 那正是「等需求起来再卖」的常态。只看在售的，走链路 2 上传的隐身商品就绑不上，
     # 于是计划没有 item_id，既走不了 item 级需求分析，也不知道自己收起过谁。
     listings = [
-        {"item_id": i.id, "name": (i.name or "")[:60]}
+        {"item_id": i.id, "name": (i.name or "")[:60],
+         "category": (i.attributes or {}).get("category"),
+         "subcategory": (i.attributes or {}).get("subcategory"),
+         "head_noun": (i.attributes or {}).get("head_noun")}
         for i in ItemRepository(db).list_by_seller(int(seller_id))
         if i.status in ItemStatus.PLANNABLE
     ]
-    winner = intent_rules.best_match(intent_rules.match_listings(name, listings))
-    return int(winner["item_id"]) if winner else None
+    res = item_lookup.resolve_ref(name, listings)
+    if not res.decided or len(res.matches) != 1:
+        return None
+    return int(res.matches[0]["item_id"])
 
 
 # ============================================================

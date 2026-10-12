@@ -40,6 +40,8 @@ class MetaConfigOut(BaseModel):
     default_pickup_range_km: float
     locations: list[LocationOut]
     categories: list[str]
+    #: 大类 -> 可选子类目（「其他…」在最后）。上架表单的第二个下拉框读它。
+    subcategories: dict[str, list[str]] = Field(default_factory=dict)
     llm_available: bool
     llm_unavailable_reason: str = ""
     index_stats: dict[str, Any] = Field(default_factory=dict)

@@ -33,6 +33,9 @@ SORTS: tuple[str, ...] = ("newest", "price_asc", "price_desc", "distance", "cond
 class BrowseFilters:
     q: str = ""
     category: str | None = None
+    #: 子类目名全局唯一，单独给也能筛；和 `category` 一起给时两条都要满足。
+    #: 还没回填子类目的商品在这里筛不出来——这是筛选，不是猜测。
+    subcategory: str | None = None
     min_price: float | None = None
     max_price: float | None = None
     #: Empty = every condition, including listings that predate the required-field
@@ -76,6 +79,8 @@ def filter_and_sort(
 
     for item in items:
         if f.category and (item.attributes or {}).get("category") != f.category:
+            continue
+        if f.subcategory and (item.attributes or {}).get("subcategory") != f.subcategory:
             continue
         if f.min_price is not None and item.price < f.min_price:
             continue

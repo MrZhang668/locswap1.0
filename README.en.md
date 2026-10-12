@@ -17,7 +17,7 @@ So the buyer side uses **rule-based parsing plus three-leg conversational retrie
 ### Buyers
 
 - **Browse board**:
-  - Filter by keyword, category, price range, condition and distance, with 5 sort orders and paging.
+  - Filter by keyword, category (and its subcategories), price range, condition and distance, with 5 sort orders and paging.
   - **Works without signing in**; distances are then measured from the campus centre.
 - **Conversational search**:
   - Describe what you want in plain language. Price, distance, category, brand and condition are extracted, then three-leg recall and fusion run (see [Retrieval pipeline](#retrieval-pipeline)).
@@ -37,10 +37,11 @@ So the buyer side uses **rule-based parsing plus three-leg conversational retrie
 
 ### Sellers
 
-- **Manual listing**: upload a photo (compressed server-side to a 1024 px long edge), then pick category and condition and set price and pickup location. No AI involved.
+- **Manual listing**: upload a photo (compressed server-side to a 1024 px long edge), then pick category and condition and set price and pickup location. The subcategory is optional; left empty, the item goes under the category's "other" bucket. No AI involved.
 - **My showcase**: view the reservation queue, confirm a deal, pause or resume a listing, or delete it permanently.
 - **Sales advisor chat** (LLM required): supports multiple threads that can be created, renamed and deleted; conversations are stored in SQLite.
   - **Intent routing**: each turn first decides what the seller wants: analysis, publishing, a status change, "sell it later", or a clarifying question.
+  - **Working out which listing the seller means**: when the seller names something ("do I have a desk lamp listed?"), the head noun of what they said is first compared with the head noun stored on each listing; only if that cannot decide does a model make the call (call site I), and its answer must also pass a subcategory check. So "desk lamp" finds an "LED eye-care desk light", while "bike reflector" is not mistaken for the bike. If the model call fails, it falls back to matching title tokens.
   - **Analysis** (read-only tools):
     - my items;
     - potential buyers, matched from wants and shown as anonymous cards;
@@ -259,6 +260,7 @@ The thresholds are calibrated with `scripts/calibrate_retrieval.py`. Re-run it a
 | F | Draft listing extraction | main | error |
 | G | Sale-plan agent | main | degraded reply |
 | H | "Sell it later" detection | router | falls back to lexical rules |
+| I | Which of the seller's listings they are naming | router | falls back to matching title tokens |
 
 Each call site's system prompt lives in `prompts/`. The tokens each call uses are logged to the `token_usage_log` table; summarise them with `python scripts/token_report.py`.
 
@@ -294,6 +296,7 @@ Steps, server choice and pitfalls are in [deploy/README.md](deploy/README.md) (C
 | `scripts/simulate_platform.py` | 12 weeks of simulated history (dry run unless `--apply`) |
 | `scripts/calibrate_retrieval.py`, `scripts/eval_retrieval.py` | retrieval threshold calibration and evaluation |
 | `scripts/check_production_config.py` | pre-deploy production config check |
+| `scripts/backfill_subcategory.py` | add subcategory and head noun to existing items (by default only asks the model and writes a report; `--apply` writes a reviewed report to the database, then restart the backend to rebuild the index) |
 | `scripts/smoke_llm.py` | LLM connectivity check with a real call |
 | `scripts/token_report.py` | token usage summary |
 | `scripts/verify_*.py` | per-feature verification scripts; some need the backend running or an LLM key |
@@ -309,6 +312,7 @@ There is no unit-test framework such as pytest; features are verified with the `
 - **Without an LLM key the whole sales-advisor chat is unavailable**, including recording a sale plan.
 - **Single worker only.** The "candidate card → want" map used for pushes lives in process memory for 30 minutes and is lost on restart.
 - **Every start re-embeds** every item.
+- **Subcategories are used in two places only**: home-page browse filters and the seller looking up their own listings. Conversational search, want matching and demand analysis do not look at them yet, and neither subcategory nor head noun goes into the retrieval vectors. Items listed before this feature need `backfill_subcategory.py` before they have a subcategory; until then a subcategory filter will not find them.
 - **The frontend has no URL routing**, so a refresh returns to the home page. Also, the backend allows anonymous search, but the frontend's search page requires signing in.
 - **Authentication is demo-grade**: no password recovery, no captcha, no refresh tokens.
 - **In the demo data** some colour fields are in English, and the simulated history is fixed to June–September 2026.

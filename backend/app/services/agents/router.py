@@ -43,6 +43,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ...config import CATEGORY_DICT, settings
 from ..prompts import load_prompt
 from ..nlp import intent_rules
+from . import item_lookup
 from ..llm.langchain_client import CALL_SITE_ROUTER, build_chat_model, record_usage, router_model_name
 
 logger = logging.getLogger(__name__)
@@ -192,7 +193,12 @@ def _facts_block(
         # its own, and stops being ambiguous once you know a photo came with it —
         # but only the backend can see the attachment.
         "has_photo": has_photo,
-        "listings": listings[:10],
+        # 只给路由器看原来那四个字段、前 10 件。子类目和中心词是查找用的，放进
+        # 来只会改变一份被评测压住了的提示词的输入，而路由器用不上它们。
+        "listings": [
+            {k: row.get(k) for k in ("item_id", "name", "price", "category")}
+            for row in listings[:10]
+        ],
     }
     if hints:
         # Computed in `intent_rules` before this call: which listing names the
@@ -505,6 +511,22 @@ def apply_defer_sale(agent: str, scenario: str, slots: dict, hints: dict) -> tup
     return "defer_sale", "none", slots
 
 
+def defer_item_in_stock(slots: dict, hints: dict, listings: list[dict], message: str) -> bool:
+    """「以后再卖」的那件东西现在在不在库里——这决定走排计划还是先上架。
+
+    路由器点了名（`item_ref`）时用 `item_lookup` 判，否则退回整条消息的分词比对
+    （`name_matches`）。前者是 10-10 换上的：分词会让「自行车反光灯期末再卖」命中
+    那辆自行车，这一轮于是被当成「在库」，一路走到计划 agent 那里去收东西。查找
+    判不出来（模型调不通）时同样退回分词——那是这个判断原来的样子。
+    """
+    ref = str(slots.get("item_ref") or "").strip()
+    if ref:
+        found = item_lookup.resolve_ref(ref, listings, message=message)
+        if found.decided:
+            return bool(found.matches)
+    return bool(hints.get("name_matches"))
+
+
 # ---------------------------------------------------------------- 指代候选集
 #: 一次指代最多列这么多个候选给卖家选。超过这个数，把清单摆出来本身就变成了
 #: 一道题——那时候该说的是「你说的是哪一件」，而不是把十八件商品念一遍。
@@ -791,6 +813,25 @@ def apply_listing_done_gate(
 MISSING_ITEM_ROUTE = "item_not_found"
 
 
+def needs_item_resolution(
+    agent: str, slots: dict, item_refs: list[str], hints: dict, has_photo: bool
+) -> list[str]:
+    """这一轮要不要去查「卖家点名的东西是他的哪一件」；要的话返回要查的说法。
+
+    条件和 `apply_missing_item_gate` 的前几道放行完全一样——查的结果只有那道
+    闸门用，闸门不看的轮次查了就是白花一次模型调用。
+    """
+    if agent != "sales_agent" or has_photo:
+        return []
+    if slots.get("status_change") or hints.get("state_query"):
+        return []
+    refs = [str(r).strip() for r in (item_refs or []) if str(r).strip()]
+    if not refs:
+        ref = str(slots.get("item_ref") or "").strip()
+        refs = [ref] if ref else []
+    return refs
+
+
 def apply_missing_item_gate(
     agent: str,
     slots: dict,
@@ -798,6 +839,7 @@ def apply_missing_item_gate(
     hints: dict,
     listings: list[dict],
     has_photo: bool,
+    resolution: dict | None = None,
 ) -> tuple[str, list[str]]:
     """卖家要分析的那件东西不在他的在售列表里。
 
@@ -820,6 +862,16 @@ def apply_missing_item_gate(
 
     带照片的一轮不进这道闸门：照片本身就是「这件东西现在给你」，那是上架流程的
     入口，不是一次找不到。
+
+    **给了 `resolution`（`item_lookup.resolve_refs` 的结果）时，判据换成它。** 分词
+    比对在两个方向上都错——「台灯」对不上「LED护眼书桌灯」，「自行车反光灯」却对得上
+    「Giant白色通勤自行车」——而后一种恰好会让第二条防误伤线把一个问反光灯的卖家
+    放进一份自行车分析。所以：
+
+    * 每个说法按判定结果算找没找到，不再用分词；
+    * 整条消息的分词命中只在**没有被判定解释掉**时才放行（见
+      `item_lookup.explained_away`）；
+    * 任何一个说法没判成（模型调用失败），整轮退回原来的判据。
     """
     if agent != "sales_agent" or has_photo:
         return agent, []
@@ -827,12 +879,22 @@ def apply_missing_item_gate(
         # 前者后面有自己的确认闸门，后者问的是「我一共挂了几件」——两者都不需要
         # 一件具体的商品存在。
         return agent, []
-    if hints.get("name_matches"):
-        return agent, []
     refs = [str(r).strip() for r in (item_refs or []) if str(r).strip()]
     if not refs:
         ref = str(slots.get("item_ref") or "").strip()
         refs = [ref] if ref else []
+    if refs and resolution and all(
+        resolution.get(r) is not None and resolution[r].decided for r in refs
+    ):
+        if item_lookup.explained_away(hints.get("name_matches") or [], refs, resolution):
+            return agent, []
+        missing = [r for r in refs if not resolution[r].matches]
+        if len(missing) != len(refs):
+            return agent, []
+        logger.info("[missing-item] %s not listed (resolved); this is a listing job", missing)
+        return MISSING_ITEM_ROUTE, missing
+    if hints.get("name_matches"):
+        return agent, []
     if not refs:
         # 他没点名任何东西（「我这几件都盘一下」）。那是另一类问题，顾问答得了。
         return agent, []

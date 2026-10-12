@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 #: Call sites owned by the agent stack. A.* and B.* stay in llm/client.py.
 CALL_SITE_ROUTER = "D.orchestrator_router"
 CALL_SITE_DEFER_INTENT = "H.defer_intent"
+CALL_SITE_ITEM_LOOKUP = "I.item_lookup"
 
 
 def router_model_name() -> str:
