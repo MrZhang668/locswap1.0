@@ -986,7 +986,11 @@ def route(
         agent = "clarify"
 
     question = decision.clarify_question.strip()
-    if agent == "clarify" and not question:
+    if agent == "clarify" and not question and not decision.out_of_scope:
+        # An out-of-scope turn is left empty on purpose: `clarify_node` has a
+        # boundary statement for it, and filling the capability menu here would
+        # shadow that — "帮我买个显示器架" answered with a list of what the
+        # advisor can do reads as the request not having been understood.
         question = FALLBACK_QUESTION
 
     raw_slots = decision.slots.model_dump()
