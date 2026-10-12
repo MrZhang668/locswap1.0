@@ -1,6 +1,6 @@
 # LocSwap · 校园二手交易平台
 
-[English](README.en.md) · 在线演示：<https://locswap.cn>
+[English](README.en.md) · 在线演示：<https://locswap.cn> · [界面截图与对话示例](screenshots/README.md)
 
 LocSwap 是一个面向校园的二手交易平台，场景设定在约翰霍普金斯大学（JHU）Homewood 校区周边。代码里预置了 18 个公寓和联排作为交易地点；界面是中文，价格以美元计。
 
@@ -115,6 +115,7 @@ LocSwap 是一个面向校园的二手交易平台，场景设定在约翰霍普
 ├── prompts/                     # 各 LLM 调用点的系统提示词（Markdown，修改后热加载）
 ├── scripts/                     # 数据初始化、模拟、标定、评测与验收脚本
 ├── deploy/                      # Dockerfile、docker-compose、nginx、部署脚本（见 deploy/README.md）
+├── screenshots/                 # 界面截图与销售顾问对话示例（附说明）
 └── .env.example                 # 配置模板
 ```
 

@@ -1,6 +1,6 @@
 # LocSwap · Campus Second-hand Marketplace
 
-[中文](README.md) · Live demo: <https://locswap.cn>
+[中文](README.md) · Live demo: <https://locswap.cn> · [Screenshots and example conversations](screenshots/README.en.md)
 
 LocSwap is a second-hand marketplace for a university campus. It is set around the Johns Hopkins University (JHU) Homewood campus, with 18 apartment and townhouse pickup locations built in. The UI is in Chinese and prices are in US dollars.
 
@@ -115,6 +115,7 @@ Authentication is hand-rolled: PBKDF2-SHA256 password hashes and HMAC-signed tok
 ├── prompts/                     # system prompts per LLM call site (Markdown, hot-reloaded)
 ├── scripts/                     # seeding, simulation, calibration, evaluation and verification scripts
 ├── deploy/                      # Dockerfiles, docker-compose, nginx, deploy scripts (see deploy/README.md, Chinese)
+├── screenshots/                 # UI screenshots and example seller-advisor conversations, with captions
 └── .env.example                 # configuration template
 ```
 
