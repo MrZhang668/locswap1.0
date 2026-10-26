@@ -45,10 +45,10 @@ FORBIDDEN_INDEX_FIELDS = ("seller_id", "seller", "email", "password_hash", "user
 #: **不进索引文本**（也就不进向量）的属性。
 #:
 #: 不是隐私问题，是范围问题：它们一旦进了索引文档，每一件商品的向量都会变，
-#: 买家检索的评测基线也就跟着变。子类目另外以**过滤字段**的身份进了 metadata
+#: 买家检索的效果也就跟着变。子类目另外以**过滤字段**的身份进了 metadata
 #: 和检索镜像（`build_index_metadata` / `IndexedItem.subcategory`）——那不改变
 #: 任何向量，只是让以后的硬过滤有东西可用。要让它们影响语义检索时，删掉这一行、
-#: 重建索引、重跑检索评测，三件事一起做。
+#: 重建索引、重新验证检索效果，三件事一起做。
 SELLER_ONLY_FIELDS = ("subcategory", "head_noun")
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")

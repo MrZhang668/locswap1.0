@@ -229,8 +229,8 @@ class Settings(BaseSettings):
     # Vector leg: absolute similarity floor + window relative to the best hit
     # (bge-family cosine baselines run high, so both are needed).
     #
-    # Recalibrated 2026-09-15 on the Chinese corpus (644 items, bge-small-zh-v1.5)
-    # with scripts/calibrate_retrieval.py: positives score 0.420–0.708 (median
+    # Recalibrated 2026-09-15 on the Chinese corpus (644 items, bge-small-zh-v1.5):
+    # positives score 0.420–0.708 (median
     # 0.564), negatives 0.321–0.481 (washing machine .448, printer .450,
     # graphics card .481...). 0.50 clears every negative; the positives under it
     # are conversational phrasings that the other two legs recall, and the
@@ -304,8 +304,7 @@ class Settings(BaseSettings):
     # cleanly. 0.53 deliberately favours precision over recall: a bogus buyer
     # shown to a seller costs more trust than a missed one costs reach. That
     # drops the marginal 0.527 positive too — accepted on purpose.
-    # Run a real sweep before trusting this; scripts/calibrate_retrieval.py
-    # currently only sweeps query -> item and needs a want -> item mode added.
+    # Run a real want -> item sweep before trusting this.
     #: Master switch for the opt-in fan-out. Off disables it everywhere,
     #: including for buyers who already turned their own toggle on.
     want_autonotify_enabled: bool = True

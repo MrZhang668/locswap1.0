@@ -37,12 +37,10 @@ grep -qE "^CORS_ORIGINS=.*$IP" .env.production \
 
 echo "== 2/6 packaging"
 STAGE=$(mktemp -d); trap 'rm -rf "$STAGE"' EXIT
-# Only what the images are built from. Evaluation corpora, local data and
-# secrets stay here; .env.production goes up separately with 600 permissions.
+# Only what the images are built from. Local data and secrets stay here; .env.production goes up separately with 600 permissions.
 tar -czf "$STAGE/src.tgz" \
   --exclude='node_modules' --exclude='dist' --exclude='__pycache__' --exclude='*.pyc' \
   --exclude='*.log' --exclude='deploy/certs' \
-  --exclude='scripts/badcase_eval' --exclude='scripts/intent_eval' \
   .dockerignore backend prompts scripts frontend deploy
 ls -lh "$STAGE/src.tgz" | awk '{print "  source bundle " $5}'
 

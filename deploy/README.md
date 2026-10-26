@@ -52,7 +52,7 @@ python scripts/check_production_config.py --env-file .env.production
 bash deploy/push.sh root@<服务器IP> --seed
 ```
 
-它依次做：本地预检配置 → 打包代码（不含评测语料、本地数据、密钥）→ 上传 → 在服务器上装 Docker、加 4 GB swap、
+它依次做：本地预检配置 → 打包代码（不含本地数据、密钥）→ 上传 → 在服务器上装 Docker、加 4 GB swap、
 限制容器日志大小 → **preflight（模型调用 + 各依赖连通性 + 内存/磁盘）** → 构建并启动 → `--seed` 时把本地数据库和商品图传上去 → 等健康检查通过。
 
 - 首次构建 10–20 分钟（装 torch、下载向量模型烤进镜像）；首次启动再花几分钟重建向量索引，所以健康检查的宽限期是 240 秒。

@@ -35,15 +35,10 @@ backups/
 training_source_image_product/
 
 # ---------------------------------------------------------------------------
-# Evaluation results and fixtures — kept private. The eval *code* under
-# scripts/badcase_eval/ and scripts/intent_eval/ is public; its result JSONs
-# (runs/), photo fixtures and audits are not. Raw traces and logs likewise.
+# Raw traces and logs
 # ---------------------------------------------------------------------------
 *.jsonl
 *.log
-scripts/badcase_eval/**/*.json
-scripts/intent_eval/**/*.json
-scripts/*/runs/
 
 # ---------------------------------------------------------------------------
 # Internal development documents — not published
@@ -51,6 +46,10 @@ scripts/*/runs/
 docs/
 PROJECT_ARCHITECTURE.md
 .claude/
+eval/*.docx
+ai_agents_development/
+output/
+tmp/
 
 # ---------------------------------------------------------------------------
 # Python

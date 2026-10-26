@@ -19,6 +19,7 @@ Note: by default this **wipes** data/locswap.db, data/uploads/ and data/chroma/
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from collections import Counter, defaultdict
@@ -26,7 +27,7 @@ from datetime import timedelta
 
 import _bootstrap  # noqa: F401  # isort:skip
 
-from app.config import CAMPUS_LOCATIONS, settings
+from app.config import CAMPUS_LOCATIONS, normalize_color, settings
 from app.db import SessionLocal, engine, init_db
 from app.models import (
     Base,
@@ -113,76 +114,89 @@ def snap_price(rng, value: float) -> float:
     return float(max(5, out))
 
 
-def sentence(s: str) -> str:
-    """Capitalize the first letter of a clause so joined sentences read naturally."""
-    s = s.strip().rstrip(".")
-    return s[:1].upper() + s[1:] if s else s
+_CJK_GAP_RE = re.compile(r"(?<=[一-鿿])\s+(?=[一-鿿])")
+
+#: Variants that describe an add-on ("带后货架", "附充电器") read wrong in front
+#: of the noun — they go after the base, in brackets.
+_TRAILING_VARIANT = ("带", "附", "含", "配")
+
+
+def zh_join(*parts: str | None) -> str:
+    """Join name fragments with spaces, then drop the spaces between two Chinese
+    characters: "银色 落地灯" -> "银色落地灯", while Latin brands and model
+    numbers keep theirs ("Apple 13 英寸 M1 笔记本电脑")."""
+    text = " ".join(" ".join(p for p in parts if p).split())
+    return _CJK_GAP_RE.sub("", text)
+
+
+def clause(s: str) -> str:
+    """One clause without its closing punctuation, ready to be joined."""
+    return s.strip().rstrip("。.，,；;")
 
 
 # ============================================================
 # Copy generation
+#
+# Every function below consumes the rng exactly as the English templates did
+# (same calls, same option counts), so a given --seed still yields the same
+# products, prices and sellers — only the wording is Chinese.
 # ============================================================
 def make_name(rng, base, brand, variant, color) -> str:
-    # Trailing-style variants ("with solutions manual", "incl. charger") read wrong
-    # in front of the noun — force them after the base.
-    trailing = variant.lower().startswith(("with ", "incl"))
+    trailing = variant.startswith(_TRAILING_VARIANT)
     if brand:
         if trailing:
-            patterns = [f"{brand} {base} {variant}", f"{brand} {base}"]
+            patterns = [f"{zh_join(brand, base)}（{variant}）", zh_join(brand, base)]
             weights = [70, 30]
         else:
             patterns = [
-                f"{brand} {variant} {base}",
-                f"{brand} {base} {variant}",
-                f"{brand} {base}",
-                f"{variant} {brand} {base}",
+                zh_join(brand, variant, base),
+                zh_join(brand, base, variant),
+                zh_join(brand, base),
+                zh_join(variant, brand, base),
             ]
             weights = [40, 25, 15, 20]
     else:
         if trailing:
-            patterns = [f"{base} {variant}", f"{color} {base} {variant}", f"{color} {base}"]
+            patterns = [f"{base}（{variant}）", f"{zh_join(color, base)}（{variant}）", zh_join(color, base)]
             weights = [50, 30, 20]
         else:
             patterns = [
-                f"{variant} {base}",
-                f"{base} ({variant})",
-                f"{color} {variant} {base}",
-                f"{color} {base}",
+                zh_join(variant, base),
+                f"{base}（{variant}）",
+                zh_join(color, variant, base),
+                zh_join(color, base),
             ]
             weights = [35, 30, 20, 15]
-    name = weighted_pick(rng, list(zip(patterns, weights)))[0]
-    name = " ".join(name.split())[:200]
-    return name[:1].upper() + name[1:]
+    return weighted_pick(rng, list(zip(patterns, weights)))[0][:200]
 
 
 def make_summary(rng, base, brand, variant, color, condition, specs, uses) -> str:
-    spec_head = rng.choice(specs).split(",")[0].strip()
-    use = rng.choice(uses)
-    cond = condition.lower()
+    spec_head = clause(re.split(r"[,，]", rng.choice(specs))[0])
+    use = clause(rng.choice(uses))
     templates = [
-        f"{color} {base} in {cond} condition, {use}.",
-        f"{(brand + ' ') if brand else ''}{base} in {cond} condition, {spec_head}.",
-        f"{variant} {base}, {spec_head}, {use}.",
-        f"{color} {base}, {spec_head}. {sentence(use)}.",
+        f"{zh_join(color, base)}，{condition}，{use}。",
+        f"{zh_join(brand, base)}，{condition}，{spec_head}。",
+        f"{zh_join(variant, base)}，{spec_head}，{use}。",
+        f"{zh_join(color, base)}，{spec_head}。{use}。",
     ]
-    return sentence(rng.choice(templates))[:400]
+    return rng.choice(templates)[:400]
 
 
 def make_description(rng, category, name, base, brand, variant, color, condition, specs, uses) -> str:
-    # Don't repeat the color if the item name already carries it
-    # (otherwise you get "Silver drying rack, folding, Silver").
-    if variant.lower().startswith(("with ", "incl")):
-        first = f"{(brand + ' ') if brand else ''}{base} {variant}"
+    if variant.startswith(_TRAILING_VARIANT):
+        first = f"{zh_join(brand, base)}（{variant}）"
     else:
-        first = f"{(brand + ' ') if brand else ''}{variant} {base}"
+        first = zh_join(brand, variant, base)
     opening_options = [
         first,
-        f"{color} {base}, {variant}",
+        f"{zh_join(color, base)}，{variant}",
         name,
     ]
-    if color.lower() not in name.lower():
-        opening_options[0] += f" in {color.lower()}"
-        opening_options[2] += f", {color.lower()}"
+    # Don't repeat the color if the item name already carries it
+    # (otherwise you get "银色晾衣架，折叠，银色").
+    if color not in name:
+        opening_options[0] = zh_join(color, opening_options[0])
+        opening_options[2] += f"，{color}"
     parts = [rng.choice(opening_options)]
 
     # 1-2 detail clauses, no repeats
@@ -198,7 +212,7 @@ def make_description(rng, category, name, base, brand, variant, color, condition
     elif rng.random() < 0.7:
         parts.append(rng.choice(TRADE_CLAUSES))
 
-    return ". ".join(sentence(p) for p in parts) + "."
+    return "。".join(clause(p) for p in parts) + "。"
 
 
 def build_item_payload(rng) -> dict:
@@ -208,7 +222,8 @@ def build_item_payload(rng) -> dict:
 
     brand = rng.choice(brands)
     variant = rng.choice(variants)
-    color = rng.choice(colors)
+    color_key = rng.choice(colors)  # the catalog's English key; the photo library uses it
+    color = normalize_color(color_key)
     condition, _, price_factor = weighted_pick(rng, CONDITION_WEIGHTS)
 
     price = snap_price(rng, rng.uniform(lo, hi) * price_factor)
@@ -216,7 +231,9 @@ def build_item_payload(rng) -> dict:
 
     return {
         "name": name,
-        "base": base,  # used by the photo library to match "prototype|Color"; not stored
+        # base + color_key: how the photo library matches "prototype|Color"; not stored
+        "base": base,
+        "color_key": color_key,
         "summary": make_summary(rng, base, brand, variant, color, condition, specs, uses),
         "description": make_description(
             rng, category, name, base, brand, variant, color, condition, specs, uses
@@ -403,7 +420,7 @@ def main() -> int:
             if args.no_images:
                 photo = None
             else:
-                lib_path = library.get(f"{payload['base']}|{payload['attributes']['color']}")
+                lib_path = library.get(f"{payload['base']}|{payload['color_key']}")
                 if lib_path:
                     photo = compress_and_save(lib_path.read_bytes())
                     n_lib_photos += 1

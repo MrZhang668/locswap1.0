@@ -8,7 +8,26 @@ It targets the friction on both sides of a campus resale:
 - **Buyers** don't want to page through listings. They want to say "a bike under $300, close to me".
 - **Sellers** don't know what to charge, whether anyone wants the item, or how to describe it.
 
-So the buyer side uses **rule-based parsing plus three-leg conversational retrieval**. The seller side has a **LangGraph sales-advisor agent** that queries data, finds potential buyers, and reviews and drafts listings. Every write action needs the seller's explicit confirmation before it runs.
+The approach:
+- **Buyer side**: rule-based parsing plus three-leg conversational retrieval.
+- **Seller side**: a **LangGraph sales-advisor agent** that queries data, finds potential buyers, and reviews and drafts listings. Every write action needs the seller's explicit confirmation before it runs.
+- **Evaluation**: the advisor has an end-to-end regression suite on Promptfoo: 114 tasks, pass^3 as the north-star metric, plus guardrails and a release gate. See [Evaluation](#evaluation).
+
+## Contents
+
+- [Features](#features)
+- [Screenshots and examples](#screenshots-and-examples)
+- [Evaluation](#evaluation)
+- [Tech stack](#tech-stack)
+- [Repository layout](#repository-layout)
+- [Getting started (local)](#getting-started-local)
+- [Key settings](#key-settings)
+- [Retrieval pipeline](#retrieval-pipeline)
+- [LLM call sites](#llm-call-sites)
+- [Privacy and security](#privacy-and-security)
+- [Deployment](#deployment)
+- [Scripts](#scripts)
+- [Known limitations](#known-limitations)
 
 ---
 
@@ -108,7 +127,7 @@ The sales advisor (call site C) calls the `analyze_demand` tool. The card shows 
 
 "How buyers search" lists only phrasings used by at least 3 people. Phrasings used by fewer than 3 people are hidden, so no individual buyer can be singled out.
 
-> **Reading note**: demand data currently comes only from the simulated history (see [Known limitations](#known-limitations)). That history ends on 2026-09-14, so only 3 days fall inside the 30-day window. The card says "insufficient data" and doesn't call a trend.
+> **Reading note**: demand data currently comes only from the simulated history (see [Known limitations](#known-limitations)). The history used for the screenshots ended on 2026-09-14 (the script now ends it on the day it runs; see [Known limitations](#known-limitations)), so only 3 days fall inside the 30-day window. The card says "insufficient data" and doesn't call a trend.
 
 #### Example 2 · "Help me sell the lamp"
 
@@ -170,6 +189,70 @@ When a want does qualify, the buyer appears as an anonymous card ("Candidate N")
 
 ---
 
+## Evaluation
+
+The sales advisor has an end-to-end regression suite in [`eval/`](eval/); how to run it is in [eval/README.md](eval/README.md) (Chinese).
+
+### What is tested and how
+
+- **System under test**: the whole seller-side LangGraph graph, driven through the same chat and approve-listing endpoints the seller uses. Buyer search is out of scope.
+- **Harness**: Promptfoo with a custom provider that runs each trial in its own sandbox subprocess, with a temporary database, an in-memory vector store, a fixed `sentence-transformers` embedding model and email turned off.
+- **Grading**:
+  - anything code can decide is graded by code: the route, the item resolved, the tool calls, the pending action and the final database state;
+  - semantic checks go to an LLM judge (Claude Opus 5.5, a different model family from the system under test), which judges one criterion per call and gives its reason before the verdict;
+  - whether a task is done is decided by the database end state and the cards, never by the wording of the reply.
+
+### Dataset
+
+114 development tasks, expanded from 44 seeds in the stage-0 manual tests and grouped into 7 capability areas: 64 typical, 32 edge and 18 adversarial; 35 are P0 (high risk) and 34 are multi-turn. Every adversarial task is paired with a similar-sounding normal task, so wrongful refusals are caught too.
+
+| Area | Prefix | Tasks | What it checks |
+|---|---|---|---|
+| Intent routing | IR | 18 | each turn reaches the right agent, or a clarifying question when needed |
+| Item lookup | IL | 15 | which listed item the seller means |
+| Tool choice and arguments | TP | 15 | the right read-only tool is called with the right arguments |
+| Evidence-based answers | EG | 15 | numbers and conclusions in the reply are backed by tool output |
+| Write actions | WO | 20 | pushes, pauses and sale plans run after, and only after, confirmation |
+| Publishing | PB | 15 | compliance review, draft extraction and approval |
+| Session state | CS | 16 | references across turns, resuming parked tasks |
+
+### Metrics and gate
+
+- **North star**: stable task completion, pass^3: the chance that all 3 runs of a task succeed, computed per task as C(c,3)/C(n,3) and averaged. Normal tasks run 3 times, P0 tasks 5 times.
+- **Guardrails** (must be 0): unauthorized writes, false "done" claims, buyer privacy leaks, banned content let through.
+- **Release gate**: every guardrail is 0, every P0 trial passes, and pass^3 is not below the baseline. A task that flips from pass to fail is rerun 10 times to confirm a real regression.
+- Bad cases already known from manual testing are tagged `known_fail`: they run and are reported, but do not count toward the gate.
+
+### Baseline (2026-10-24)
+
+The system under test was `openai/gpt-5.6-terra`. 412 trials (404 valid), averaging about 5.1 model calls and 24k tokens per trial, with a p95 latency of 44.1 s.
+
+| Metric | Result |
+|---|---|
+| pass^3 (106 scored tasks) | **82.6%** |
+| pass^3, typical subset | 83.6% |
+| pass@1 | 86.0% |
+| Gate | **failed** |
+
+| Area | pass^3 | pass@1 |
+|---|---|---|
+| Tool choice and arguments | 95.7% | 95.3% |
+| Evidence-based answers | 92.9% | 93.3% |
+| Intent routing | 88.9% | 88.9% |
+| Item lookup | 86.7% | 93.3% |
+| Publishing | 81.8% | 83.3% |
+| Write actions | 71.1% | 77.8% |
+| Session state | 65.0% | 71.7% |
+
+Why the gate failed:
+- One unauthorized write (WO-19: a hesitant or conditional phrasing was taken as a firm "sell it later"). All other guardrails were 0.
+- 10 of the 34 gated P0 tasks did not pass every trial, mostly on the sale-plan and confirmation paths.
+- PB-03 could not run because its banned-image fixture is missing.
+
+Fixes follow one rule: problems in write actions and routing are backed by deterministic code and rules rather than prompts alone, while problems in reply content are fixed in the prompts. This run is the baseline for later regressions.
+
+---
+
 ## Tech stack
 
 | Layer | Technology |
@@ -178,6 +261,7 @@ When a want does qualify, the buyer appears as an anonymous card ("Candidate N")
 | Retrieval | sentence-transformers (`BAAI/bge-small-zh-v1.5`, 512-dim), ChromaDB (switchable to Milvus / Zilliz Cloud, or in-memory), rank_bm25 + jieba |
 | LLM / agents | LangGraph, LangChain, the Anthropic SDK, or any OpenAI-compatible API (e.g. OpenRouter) |
 | Frontend | React 18, Vite 5, Leaflet (OpenStreetMap tiles), three.js (home-page globe) |
+| Evaluation | Promptfoo, custom Python provider and code graders, LLM judge |
 | Deployment | Docker Compose (app container + nginx container), certbot (HTTPS) |
 
 Authentication is hand-rolled: PBKDF2-SHA256 password hashes and HMAC-signed tokens (not JWT), valid for 7 days by default.
@@ -221,8 +305,14 @@ Authentication is hand-rolled: PBKDF2-SHA256 password hashes and HMAC-signed tok
 │       ├── api.js               # every backend call
 │       ├── pages/               # home, find, cart, sell, messages, profile, login, onboarding
 │       └── components/          # browse board, campus map, globe, sales-advisor chat, ...
+├── eval/                        # sales-advisor regression suite (see eval/README.md)
+│   ├── promptfooconfig.yaml     # Promptfoo config: provider, LLM judge, test source
+│   ├── tasks/                   # 114 tasks, one file per capability area
+│   ├── harness/                 # sandbox, shared market data and seller fixtures
+│   ├── graders/                 # code graders and guardrails
+│   └── report.py                # pass^3, guardrails, failure attribution and gate verdict
 ├── prompts/                     # system prompts per LLM call site (Markdown, hot-reloaded)
-├── scripts/                     # seeding, simulation, calibration, evaluation and verification scripts
+├── scripts/                     # seeding, simulation and verification scripts
 ├── deploy/                      # Dockerfiles, docker-compose, nginx, deploy scripts (see deploy/README.md, Chinese)
 ├── screenshots/                 # UI screenshots used in this README, plus a PDF that collects them
 └── .env.example                 # configuration template
@@ -235,7 +325,7 @@ Authentication is hand-rolled: PBKDF2-SHA256 password hashes and HMAC-signed tok
 ### 1. Requirements
 
 - **Python 3.13**, the version used in development and in the Docker image.
-- **Node.js 18+**, as required by Vite 5.
+- **Node.js 18+**, as required by Vite 5; the eval also needs it for `npx promptfoo`.
 - Disk: a few GB for torch plus the embedding model.
 
 ### 2. Configuration
@@ -276,7 +366,7 @@ pip install -r backend/requirements.txt
 # Demo data: 1 buyer + 120 sellers + 560 items (wipes existing data)
 python scripts/seed_mock.py
 
-# Optional: simulate 12 weeks of activity on that data (sales, wants and searches dated 2026-06 to 2026-09).
+# Optional: simulate the 12 weeks up to today on that data (sales, wants and searches).
 # The advisor's sold-price and demand analysis and the sale-plan check rely on this history.
 python scripts/simulate_platform.py --apply
 ```
@@ -313,6 +403,16 @@ Every account's password is `demo1234`.
 | `seed.py` | `buyer@campus.edu` | `seller1@campus.edu` … `seller3@campus.edu` |
 
 You can also register a new account from the login page.
+
+### 6. Run the eval (optional)
+
+The eval needs an LLM key and costs money in model calls. Start with the static check, which makes no model calls:
+
+```bash
+python eval/validate_tasks.py
+```
+
+The full regression commands, the Windows encoding setting and cost estimates are in [eval/README.md](eval/README.md).
 
 ---
 
@@ -354,8 +454,6 @@ The entry point is `backend/app/services/retrieval.py`.
    - **Structured**: field matching on category, brand and keywords, tiered into head word, modifier and substring matches.
 5. **Fusion**: RRF (k = 60), with a penalty for results where the query word is only a modifier, then the top 8. Confidence below 0.25 leads to a clarifying question or a "low confidence" note.
 6. **Reply text** comes from templates, with no LLM.
-
-The thresholds are calibrated with `scripts/calibrate_retrieval.py`. Re-run it after changing the corpus or the embedding model.
 
 ---
 
@@ -404,7 +502,6 @@ Steps, server choice and pitfalls are in [deploy/README.md](deploy/README.md) (C
 | `scripts/seed_mock.py` | main data set, then rebuild indexes |
 | `scripts/seed.py` | small data set (25 items) |
 | `scripts/simulate_platform.py` | 12 weeks of simulated history (dry run unless `--apply`) |
-| `scripts/calibrate_retrieval.py`, `scripts/eval_retrieval.py` | retrieval threshold calibration and evaluation |
 | `scripts/check_production_config.py` | pre-deploy production config check |
 | `scripts/backfill_subcategory.py` | add subcategory and head noun to existing items (by default only asks the model and writes a report; `--apply` writes a reviewed report to the database, then restart the backend to rebuild the index) |
 | `scripts/smoke_llm.py` | LLM connectivity check with a real call |
@@ -412,7 +509,7 @@ Steps, server choice and pitfalls are in [deploy/README.md](deploy/README.md) (C
 | `scripts/verify_*.py` | per-feature verification scripts; some need the backend running or an LLM key |
 | `scripts/gen_item_images.py`, `scripts/gen_item_photos.py` | generate item photos with an image model (needs an OpenRouter key; billed per image) |
 
-There is no unit-test framework such as pytest; features are verified with the `verify_*.py` scripts above.
+There is no unit-test framework such as pytest. Individual features are verified with the `verify_*.py` scripts above, and the advisor's end-to-end quality is measured by the regression suite in [`eval/`](eval/).
 
 ---
 
@@ -425,4 +522,5 @@ There is no unit-test framework such as pytest; features are verified with the `
 - **Subcategories are used in two places only**: home-page browse filters and the seller looking up their own listings. Conversational search, want matching and demand analysis do not look at them yet, and neither subcategory nor head noun goes into the retrieval vectors. Items listed before this feature need `backfill_subcategory.py` before they have a subcategory; until then a subcategory filter will not find them.
 - **The frontend has no URL routing**, so a refresh returns to the home page. Also, the backend allows anonymous search, but the frontend's search page requires signing in.
 - **Authentication is demo-grade**: no password recovery, no captcha, no refresh tokens.
-- **In the demo data** some colour fields are in English, and the simulated history is fixed to June–September 2026.
+- **The simulated history ends on the day it is generated**: standing wants last 14 days, so about two weeks after a rebuild every simulated want has expired and "find potential buyers" comes back empty. Re-run `seed_mock.py` and `simulate_platform.py --apply` when that matters.
+- **What the eval does not cover yet**: multi-turn tasks are scripted, with no LLM-simulated seller; relative dates in the fixtures (such as end of term) follow the real clock, with no injectable "now"; the banned-image fixture for PB-03 has not been added.

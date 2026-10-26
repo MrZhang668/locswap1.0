@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# LocSwap 销售顾问回归集。运行方法见 eval/README.md。
+#
+#   export PYTHONUTF8=1   # Windows 必需，见下方说明
+#   npx promptfoo@0.125.0 eval -c eval/promptfooconfig.yaml --repeat 3 -o eval/out/run.json
+#   npx promptfoo@0.125.0 eval -c eval/promptfooconfig.yaml --filter-metadata risk=P0 --repeat 2 -o eval/out/p0.json
+#   （P0 task 第一步已跑 3 次，再补 2 次凑满 5 次）
+#   python eval/report.py eval/out/run.json eval/out/p0.json
+description: LocSwap 销售顾问回归集
+
+# 占位：provider 不用 prompt，从 context.vars 读取 fixture 和 turns。
+prompts:
+  - "{{task_id}}"
+
+providers:
+  - id: file://provider.py
+    label: advisor@HEAD
+
+# Windows：运行前必须在 shell 里设 PYTHONUTF8=1（写在这里的 env 传不到
+# Promptfoo 起的 Python 断言进程）。否则项目路径里的中文会让 Python 断言
+# 在打印时报 UnicodeEncodeError，所有代码断言都会判失败。
+evaluateOptions:
+  # 每个试次是一个子进程，要加载向量模型；并发太高会把内存吃满。
+  maxConcurrency: 2
+
+defaultTest:
+  options:
+    # LLM 评委：Claude Opus 5.5，和被测模型（openai/gpt-5.6-terra）不是同一家族。
+    # 走 OpenRouter，复用 .env 里的 LLM_API_KEY；有 ANTHROPIC_API_KEY 时也可以改成
+    # anthropic:messages:claude-opus-5-5。
+    provider:
+      id: openrouter:anthropic/claude-opus-5.5
+      config:
+        apiKeyEnvar: LLM_API_KEY
+        temperature: 0
+    rubricPrompt: |
+      你是 LocSwap 销售顾问的评测评委。下面是一次对话的记录和后端事实，以及一条评分标准。
+      只判断这一条标准，不评价其他方面；不因为回复更长、更礼貌就判通过。
+      评判时以【后端事实】为准：回复里的说法要能在事实里找到依据，你自己不判断市场行情。
+      先写理由，再给结论。如果记录里的信息不足以判断，判不通过，并让理由以「无法判断」开头。
+
+      【记录】
+      {{output}}
+
+      【评分标准】
+      {{rubric}}
+
+      只输出 JSON：{"reason": "<理由>", "pass": true 或 false, "score": 1 或 0}
+
+# 断言不写在 defaultTest 里：build_tests.py 读 tasks/*.yaml，给每个 task 只挂
+# 它声明过的代码断言，外加每个 task 都查的三条护栏（未授权写操作、虚假完成、
+# 隐私泄露）。这样结果页上出现的每个分数都是真正判过的。
+tests: file://build_tests.py:create_tests

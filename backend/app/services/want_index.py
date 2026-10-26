@@ -11,8 +11,8 @@ Two directions:
   * match_items_for_want — new want (E2): is it already in stock?
 
 Matching thresholds are always read from settings.* — never copy the numbers:
-they're calibrated on the real corpus by scripts/calibrate_retrieval.py; when
-the corpus changes just rerun the script, this module needs no edits.
+they're calibrated on the real corpus; when the corpus changes, recalibrate
+and update the settings — this module needs no edits.
 
 This module uses settings.want_match_* , NOT settings.vector_min_similarity:
 retrieval compares query -> item, while everything here compares item -> want.

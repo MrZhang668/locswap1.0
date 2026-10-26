@@ -1,4 +1,4 @@
-"""Simulate 12 weeks of platform operation on top of the existing corpus.
+"""Simulate the 12 weeks up to today of platform operation on top of the existing corpus.
 
 Why this exists: the demand and pricing analysis the sales agent is supposed to
 do has nothing to read today.
@@ -19,15 +19,20 @@ do has nothing to read today.
 What it does, in five phases (each reports before/after; nothing is written
 without --apply):
 
-  1. items    fill the two gaps around the existing corpus — 2026-06-22..07-07
-              and 2026-08-27..09-14 — reusing mock_catalog's prototypes so the
-              new rows are indistinguishable in style from the 515 already there.
+  1. items    fill the parts of the window the existing corpus leaves empty
+              (seed_mock covers roughly the last 45 days), reusing
+              mock_catalog's prototypes so the new rows are indistinguishable
+              in style from the ones already there.
   2. sales    raise the sold count to ~18% of the corpus, spread across the
               window, with sold_price drawn from the asking price by condition,
               and reservations / notifications / status_log all carrying the
               *sale's* timestamp rather than the moment this script ran.
-  3. wants    ~180 standing wants across the window, statuses mixed
-              (active / expired / fulfilled) instead of uniformly expired.
+  0. buyers   200 dedicated buyer accounts (buyer001..buyer200@campus.edu);
+              they, not the sellers, do the searching, wanting and reserving.
+  3. wants    400 standing wants across the window (mostly expired by now),
+              then topped up to 560 still open — every catalogue prototype at
+              least twice. Worded like buyers write them and parsed by the
+              product's own parse_query.
   4. demand   the `demand_event` log: one row per buyer action (search / view /
               want / reserve), shaped by a campus calendar — a summer lull, a
               move-in spike in late August, a settled semester level after.
@@ -55,9 +60,11 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
+from sqlalchemy import func
+
 import _bootstrap  # noqa: F401  injects backend into sys.path
 
-from app.config import CAMPUS_LOCATIONS, settings  # noqa: E402
+from app.config import CAMPUS_LOCATIONS, CONDITION_DICT, normalize_color, settings  # noqa: E402
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.models import (  # noqa: E402
     DemandEvent,
@@ -74,25 +81,51 @@ from app.models import (  # noqa: E402
     User,
     WantSource,
     WantStatus,
+    utcnow,
 )
+from app.security import hash_password  # noqa: E402
 from app.services.images import compress_and_save, make_placeholder  # noqa: E402
-from mock_catalog import TIME_SLOTS  # noqa: E402
-from seed_mock import build_item_payload, load_image_library  # noqa: E402
+from app.services.query_parser import parse_query  # noqa: E402
+from mock_catalog import CATALOG, TIME_SLOTS  # noqa: E402
+from seed_mock import build_item_payload, load_image_library, zh_join  # noqa: E402
 
 # ============================================================
 # The window
 # ============================================================
-WINDOW_END = datetime(2026, 9, 14, 23, 0, 0)
+#: The twelve weeks up to the start of today (UTC), so the history always ends
+#: where the seller is standing: the analysis windows (last 7 / 30 / 90 days)
+#: have data in them, and standing wants from the last two weeks are still live.
+#: Ends at midnight rather than now because `rand_dt` moves a timestamp to a
+#: random hour of its own day — a window ending mid-day would put the last
+#: day's events in the future.
+WINDOW_END = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 WINDOW_START = WINDOW_END - timedelta(days=84)          # 12 weeks
 
-#: The existing corpus occupies 2026-07-08 .. 08-26. These are the two holes.
-GAP_EARLY = (WINDOW_START, datetime(2026, 7, 7, 23, 59))
-GAP_LATE = (datetime(2026, 8, 27, 0, 0), WINDOW_END)
-N_EARLY, N_LATE = 120, 150
+#: New listings added around the seeded corpus. Where they go is read off the
+#: database (`listing_gaps`), not assumed: seed_mock dates its listings
+#: relative to when it ran.
+N_NEW_ITEMS = 270
+
+#: Dedicated buyer accounts. The seed has one buyer and 120 sellers, so wants,
+#: searches and reservations used to be spread over sellers — a seller could
+#: turn up as a candidate buyer for their own listing.
+N_BUYERS = 200
+BUYER_EMAIL = "buyer{:03d}@campus.edu"
+BUYER_PASSWORD = "demo1234"
 
 #: Fraction of the whole corpus that has changed hands by the end of the window.
 SOLD_RATE = 0.18
-N_WANTS_TARGET = 180
+
+#: Wants spread over the whole window — the history the demand charts read.
+#: Most have expired by the end of it, as they would have.
+N_HISTORY_WANTS = 400
+#: Wants still open when the simulation runs, created over the last 13 days so
+#: every one of them is still live the day after. Every catalogue prototype gets
+#: at least MIN_ACTIVE_PER_PROTOTYPE, so "who wants this" has an answer for
+#: every kind of item that can be listed.
+ACTIVE_WANTS_TARGET = 560
+MIN_ACTIVE_PER_PROTOTYPE = 2
+ACTIVE_WANT_SPAN = timedelta(days=13)
 
 #: How much of the asking price a sale actually fetches, by condition. Buyers
 #: haggle harder the more wear there is; nothing sells above asking.
@@ -104,24 +137,29 @@ PRICE_REALIZATION = {
     "成色一般": (0.62, 0.85),
 }
 
-#: Searches per day, before weekday noise. A campus marketplace is not flat:
-#: summer is quiet, move-in week is the spike everything else is measured
-#: against, and the semester settles above the summer baseline. Without a shape
-#: like this the "demand over time" chart is a straight line and says nothing.
+#: Searches per day, before weekday noise, by (month, day) the phase starts.
+#: A campus marketplace is not flat: summer is quiet, move-in week is the spike
+#: everything else is measured against, and the semester settles above the
+#: summer baseline. Keyed by calendar date rather than by offset into the
+#: window, so wherever the window falls the spike sits on the real move-in
+#: dates. Without a shape like this the "demand over time" chart is a straight
+#: line and says nothing.
+CAMPUS_CALENDAR = [
+    ((6, 1), 18.0),     # summer lull
+    ((7, 20), 32.0),    # people start planning the term
+    ((8, 17), 62.0),    # lease turnover begins
+    ((8, 24), 95.0),    # move-in week
+    ((9, 3), 70.0),     # first week of classes
+    ((9, 10), 55.0),    # settled — through to the next summer
+]
+
+
 def daily_intensity(day: datetime) -> float:
-    d = day.date()
-    if d < datetime(2026, 7, 20).date():
-        base = 18.0                     # summer lull
-    elif d < datetime(2026, 8, 17).date():
-        base = 32.0                     # people start planning the term
-    elif d < datetime(2026, 8, 24).date():
-        base = 62.0                     # lease turnover begins
-    elif d < datetime(2026, 9, 3).date():
-        base = 95.0                     # move-in week
-    elif d < datetime(2026, 9, 10).date():
-        base = 70.0                     # first week of classes
-    else:
-        base = 55.0                     # settled
+    md = (day.month, day.day)
+    base = CAMPUS_CALENDAR[-1][1]
+    for start, level in CAMPUS_CALENDAR:
+        if md >= start:
+            base = level
     # Weekends run hotter for pickups and browsing alike.
     if day.weekday() >= 5:
         base *= 1.25
@@ -226,8 +264,67 @@ def rand_dt(rng: random.Random, lo: datetime, hi: datetime) -> datetime:
 
 
 # ============================================================
-# Phase 1 — fill the two gaps with new listings
+# Phase 0 — the people doing the buying
 # ============================================================
+def phase_buyers(db, rng, apply: bool) -> int:
+    existing = {e for (e,) in db.query(User.email).filter(User.email.like("buyer%@campus.edu"))}
+    todo = [BUYER_EMAIL.format(i) for i in range(1, N_BUYERS + 1)
+            if BUYER_EMAIL.format(i) not in existing]
+    print(f"  buyer accounts: {len(existing)} existing, +{len(todo)}")
+    if not apply or not todo:
+        return len(todo)
+    pwd_hash = hash_password(BUYER_PASSWORD)  # one hash for all: PBKDF2 is slow on purpose
+    for i, email in enumerate(todo):
+        loc = rng.choice(CAMPUS_LOCATIONS)
+        ranged = rng.random() < 0.5
+        db.add(User(
+            email=email,
+            password_hash=pwd_hash,
+            avatar=f"avatar-{i % 8}",
+            location_name=loc["name"],
+            lat=loc["lat"],
+            lng=loc["lng"],
+            pickup_range_enabled=ranged,
+            pickup_range_km=float(rng.choice([1, 2, 3, 5])) if ranged else settings.default_pickup_range_km,
+            auto_notify=rng.random() < 0.3,
+            created_at=rand_dt(rng, WINDOW_START - timedelta(days=30), WINDOW_START),
+        ))
+    db.flush()
+    return len(todo)
+
+
+def buyer_pool(db) -> list[int]:
+    """Who searches, wants and reserves: the buyer accounts, or everyone when
+    there are none (a database seeded before they existed)."""
+    ids = [u for (u,) in db.query(User.id).filter(User.email.like("buyer%@campus.edu"))]
+    return ids or [u for (u,) in db.query(User.id)]
+
+
+# ============================================================
+# Phase 1 — fill the gaps around the seeded corpus with new listings
+# ============================================================
+def listing_gaps(db) -> list[tuple[tuple[datetime, datetime], int, str]]:
+    """The parts of the window the existing listings leave empty — before the
+    oldest and after the newest — with N_NEW_ITEMS split between them by
+    length. A gap shorter than a day gets nothing."""
+    oldest, newest = db.query(func.min(Item.created_at), func.max(Item.created_at)).one()
+    if oldest is None:
+        spans = [((WINDOW_START, WINDOW_END), "window")]
+    else:
+        spans = [((WINDOW_START, min(oldest, WINDOW_END)), "early"),
+                 ((max(newest, WINDOW_START), WINDOW_END), "late")]
+    spans = [(span, label) for span, label in spans if span[1] - span[0] >= timedelta(days=1)]
+    if not spans:
+        return []
+    total = sum((hi - lo).total_seconds() for (lo, hi), _ in spans)
+    plan, left = [], N_NEW_ITEMS
+    for k, ((lo, hi), label) in enumerate(spans):
+        n = left if k == len(spans) - 1 else round(N_NEW_ITEMS * (hi - lo).total_seconds() / total)
+        plan.append(((lo, hi), n, label))
+        left -= n
+    return plan
+
+
 def phase_items(db, rng, apply: bool, no_images: bool) -> list[Item]:
     sellers = list(db.query(User).all())
     if not sellers:
@@ -235,8 +332,7 @@ def phase_items(db, rng, apply: bool, no_images: bool) -> list[Item]:
     library = {} if no_images else load_image_library()
 
     created: list[Item] = []
-    plan = [(GAP_EARLY, N_EARLY, "early"), (GAP_LATE, N_LATE, "late")]
-    for (lo, hi), n, label in plan:
+    for (lo, hi), n, label in listing_gaps(db):
         print(f"  {label:6} gap {lo:%Y-%m-%d} .. {hi:%Y-%m-%d}: +{n} listings")
         if not apply:
             continue
@@ -246,7 +342,7 @@ def phase_items(db, rng, apply: bool, no_images: bool) -> list[Item]:
             t_start, t_end = rng.choice(TIME_SLOTS)
             photo = None
             if not no_images:
-                lib_path = library.get(f"{payload['base']}|{payload['attributes']['color']}")
+                lib_path = library.get(f"{payload['base']}|{payload['color_key']}")
                 photo = (compress_and_save(lib_path.read_bytes()) if lib_path
                          else make_placeholder(payload["name"], 10_000 + len(created)))
             at = rand_dt(rng, lo, hi)
@@ -282,11 +378,11 @@ def phase_items(db, rng, apply: bool, no_images: bool) -> list[Item]:
 # ============================================================
 def phase_sales(db, rng, apply: bool, _phase1_ran: bool) -> int:
     all_items = list(db.query(Item).all())
-    users = [u.id for u in db.query(User).all()]
+    buyers = buyer_pool(db)
     # On a dry run phase 1 wrote nothing, so the corpus here is still the old
     # one. Project the new listings in anyway — a dry run that reports a plan
     # different from what --apply will do is worse than no dry run.
-    projected = len(all_items) + (0 if all_items and _phase1_ran else N_EARLY + N_LATE)
+    projected = len(all_items) + (0 if all_items and _phase1_ran else N_NEW_ITEMS)
     target = int(projected * SOLD_RATE)
 
     already = [i for i in all_items if i.status == ItemStatus.SOLD_OUT]
@@ -333,8 +429,8 @@ def phase_sales(db, rng, apply: bool, _phase1_ran: bool) -> int:
     for item in chosen:
         sold_at = when[item.id]
 
-        winner = rng.choice([u for u in users if u != item.seller_id])
-        losers = [u for u in rng.sample(users, k=min(len(users), rng.choice([0, 1, 1, 2])))
+        winner = rng.choice([u for u in buyers if u != item.seller_id])
+        losers = [u for u in rng.sample(buyers, k=min(len(buyers), rng.choice([0, 1, 1, 2])))
                   if u not in (winner, item.seller_id)]
         snapshot = {
             "item_id": item.id,
@@ -431,75 +527,153 @@ def realized_price(rng: random.Random, item: Item) -> float:
 
 
 # ============================================================
-# Phase 3 — standing wants across the window, statuses mixed
+# Phase 3 — standing wants: a history across the window, plus the open ones
 # ============================================================
+#: How buyers word a want. Each slot is filled from the prototype the want is
+#: about; the sentence then goes through the product's own `parse_query`, so
+#: filters and semantic_text come out exactly as they would for a real buyer.
+WANT_TEMPLATES: list[tuple[str, int]] = [
+    ("{base}", 14),
+    ("想收一个二手{base}", 10),
+    ("求购{brand_base}", 8),
+    ("{base}，{budget} 以内", 10),
+    ("预算 {budget} 的{base}", 7),
+    ("有没有{color}的{base}", 6),
+    ("求购{cond}的{base}", 7),
+    ("想要{cond}的{brand_base}，{budget} 以内", 6),
+    ("求一个{variant_base}", 8),
+    ("附近有{base}吗", 6),
+    ("{budget} 块以内的{base}，最好{cond}", 6),
+    ("收{brand_base}", 6),
+]
+
+#: Condition wordings a buyer actually asks for — nobody writes "最好比较旧".
+#: Every one is in CONDITION_DICT, so the parser maps it to a condition.
+_CONDITION_WORDS = {
+    "全新": ["全新", "未拆封", "没用过"],
+    "几乎全新": ["几乎全新", "九九新", "用过几次"],
+    "成色很好": ["九成新", "成色不错", "成色很好"],
+    "成色良好": ["八成新", "成色良好", "成色还行"],
+}
+assert all(w in CONDITION_DICT[k] for k, ws in _CONDITION_WORDS.items() for w in ws)
+
+
+def _budget(rng: random.Random, lo: float, hi: float) -> int:
+    """A round number a buyer would name, somewhat below the typical asking price."""
+    x = rng.uniform(lo, hi) * rng.uniform(0.5, 0.9)
+    step = 5 if x < 100 else 10 if x < 500 else 50
+    return max(5, int(round(x / step) * step))
+
+
+def want_text(rng: random.Random, proto: tuple) -> str:
+    base, brands, variants, (lo, hi), colors, _specs, _uses = proto
+    template = rng.choices([t for t, _ in WANT_TEMPLATES],
+                           weights=[w for _, w in WANT_TEMPLATES])[0]
+    brand = rng.choice(brands)
+    slots = {
+        "base": base,
+        # No brand drawn: the sentence just names the item.
+        "brand_base": zh_join(brand, base),
+        "variant_base": zh_join(rng.choice(variants), base),
+        "budget": _budget(rng, lo, hi),
+        "color": normalize_color(rng.choice(colors)),
+        "cond": rng.choice(_CONDITION_WORDS[rng.choice(list(_CONDITION_WORDS))]),
+    }
+    return template.format(**slots)
+
+
 def phase_wants(db, rng, apply: bool) -> int:
     existing = db.query(StandingWant).count()
-    users = [u.id for u in db.query(User).all()]
-    need = max(N_WANTS_TARGET - existing, 0)
-    print(f"  standing wants {existing} -> {N_WANTS_TARGET} (+{need})")
+    protos = [(cat, p) for cat, ps in CATALOG.items() for p in ps]
+    print(f"  standing wants {existing}: +{N_HISTORY_WANTS} across the window, then topped "
+          f"up to {ACTIVE_WANTS_TARGET} open ones (each of {len(protos)} prototypes "
+          f"at least {MIN_ACTIVE_PER_PROTOTYPE})")
     if not apply:
-        return need
+        return N_HISTORY_WANTS + ACTIVE_WANTS_TARGET
 
+    buyers = db.query(User).filter(User.id.in_(buyer_pool(db))).all()
     ttl = timedelta(days=settings.want_ttl_days)
     cats = list(CATEGORY_DEMAND)
     weights = list(CATEGORY_DEMAND.values())
     sold_by_cat = defaultdict(list)
     for it in db.query(Item).filter(Item.status == ItemStatus.SOLD_OUT):
         sold_by_cat[(it.attributes or {}).get("category")].append(it)
+    #: The product folds a buyer repeating the same want into one row
+    #: (`find_duplicate`), so the simulation does not write two.
+    seen: set[tuple[int, str]] = set()
 
-    for _ in range(need):
-        cat = rng.choices(cats, weights=weights)[0]
-        created = rand_dt(rng, WINDOW_START, WINDOW_END)
-        query = rng.choice(QUERY_VOCAB[cat])
-        # Two thirds are captured from a search (implicit); the rest are the
-        # buyer explicitly asking to be told — the split the product actually has.
-        source = WantSource.IMPLICIT if rng.random() < 0.66 else WantSource.EXPLICIT
-        max_price = None
-        if rng.random() < 0.45:
-            max_price = float(rng.choice([25, 40, 50, 75, 100, 150, 200, 300, 500]))
-        loc = rng.choice(CAMPUS_LOCATIONS)
-
+    def add(cat: str, text: str, created: datetime, may_fulfil: bool) -> str | None:
+        buyer = next((b for b in (rng.choice(buyers) for _ in range(5))
+                      if (b.id, text) not in seen), None)
+        if buyer is None:
+            return None
+        seen.add((buyer.id, text))
+        parsed = parse_query(text)
+        filters = parsed.filters_dict()
         expires = created + ttl
-        if expires <= WINDOW_END:
-            status = WantStatus.EXPIRED
-        else:
-            status = WantStatus.ACTIVE
+        status = WantStatus.ACTIVE if expires > WINDOW_END else WantStatus.EXPIRED
         fulfilled_by = None
         # A want that a matching sale landed on top of is closed as fulfilled.
         pool = [s for s in sold_by_cat.get(cat, [])
-                if s.sold_at and created <= s.sold_at <= expires]
+                if s.sold_at and created <= s.sold_at <= expires] if may_fulfil else []
         if pool and rng.random() < 0.28:
-            hit = rng.choice(pool)
             status = WantStatus.FULFILLED
-            fulfilled_by = hit.id
-
+            fulfilled_by = rng.choice(pool).id
         db.add(StandingWant(
-            buyer_id=rng.choice(users),
-            raw_query=query,
-            filters={"category": cat} | ({"max_price": max_price} if max_price else {}),
-            semantic_text=query,
-            category=cat if rng.random() < 0.7 else None,
-            max_price=max_price,
-            min_price=None,
-            origin_lat=loc["lat"],
-            origin_lng=loc["lng"],
-            max_distance_km=float(rng.choice([2, 3, 5, 5, 8])) if rng.random() < 0.5 else None,
-            source=source,
+            buyer_id=buyer.id,
+            raw_query=text[:300],
+            filters=filters,
+            semantic_text=parsed.semantic_text[:300],
+            # The columns are filled the way `StandingWantRepository.create` fills them.
+            category=filters.get("category"),
+            max_price=filters.get("max_price"),
+            min_price=filters.get("min_price"),
+            origin_lat=buyer.lat,
+            origin_lng=buyer.lng,
+            max_distance_km=buyer.pickup_range_km if buyer.pickup_range_enabled else None,
+            # Two thirds are captured from a search (implicit); the rest are the
+            # buyer explicitly asking to be told — the split the product has.
+            source=WantSource.IMPLICIT if rng.random() < 0.66 else WantSource.EXPLICIT,
             status=status,
             fulfilled_by_item_id=fulfilled_by,
             notify_count=0,
             created_at=created,
             expires_at=expires,
         ))
-    return need
+        return status
+
+    # --- the history: across the whole window, mostly expired by now ---
+    active = added = 0
+    for _ in range(N_HISTORY_WANTS):
+        cat = rng.choices(cats, weights=weights)[0]
+        text = (rng.choice(VAGUE_QUERIES[cat]) if rng.random() < 0.1
+                else want_text(rng, rng.choice(CATALOG[cat])))
+        status = add(cat, text, rand_dt(rng, WINDOW_START, WINDOW_END), may_fulfil=True)
+        added += status is not None
+        active += status == WantStatus.ACTIVE
+
+    # --- the open ones: every prototype covered, the rest by category demand ---
+    plan = [cp for cp in protos for _ in range(MIN_ACTIVE_PER_PROTOTYPE)]
+    rng.shuffle(plan)
+    while active < ACTIVE_WANTS_TARGET or plan:
+        if plan:
+            cat, proto = plan.pop()
+        else:
+            cat = rng.choices(cats, weights=weights)[0]
+            proto = rng.choice(CATALOG[cat])
+        created = rand_dt(rng, WINDOW_END - ACTIVE_WANT_SPAN, WINDOW_END)
+        status = add(cat, want_text(rng, proto), created, may_fulfil=False)
+        added += status is not None
+        active += status == WantStatus.ACTIVE
+    print(f"      open wants at the end of the window: {active}")
+    return added
 
 
 # ============================================================
 # Phases 4 & 5 — the demand log, and the traffic counters derived from it
 # ============================================================
 def phase_demand(db, rng, apply: bool) -> tuple[int, dict]:
-    users = [u.id for u in db.query(User).all()]
+    users = buyer_pool(db)
     items = list(db.query(Item).all())
     by_cat = defaultdict(list)
     for it in items:
@@ -700,6 +874,8 @@ def main() -> int:
             print("\ncommitted.")
             summarize(db)
             return 0
+        print("[0/5] buyers")
+        phase_buyers(db, rng, args.apply)
         print("[1/5] listings")
         new_items = phase_items(db, rng, args.apply, args.no_images)
         print(f"      created {len(new_items)}")
