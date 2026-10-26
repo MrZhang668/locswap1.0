@@ -23,7 +23,6 @@ The approach:
 - [Getting started (local)](#getting-started-local)
 - [Key settings](#key-settings)
 - [Retrieval pipeline](#retrieval-pipeline)
-- [LLM call sites](#llm-call-sites)
 - [Privacy and security](#privacy-and-security)
 - [Deployment](#deployment)
 - [Scripts](#scripts)
@@ -111,7 +110,7 @@ The UI is in Chinese; the captions explain what each screen shows. All items, bu
 - The "sale-plan monitoring" pill at the top is a master switch. Next to it is how many sale plans exist and how many are being watched right now. The switch writes the same field as the `set_plan_watch` tool in the conversation, so telling the advisor "turn all reminders off" also turns the pill off.
 - The suggested prompts in the middle cover what the advisor can do: find potential buyers, check which items have the most interested buyers, check pricing, and list an item from a photo.
 
-All five examples below are about the same item, a "white desk lamp". Every message first goes through the intent router (call site D) and is then handed to the matching agent. When the seller only says "lamp", the system compares the head noun of that phrase with the head nouns stored on the seller's listed items and resolves it to the white desk lamp. If that comparison is inconclusive, a model decides instead (call site I). The call sites are listed under [LLM call sites](#llm-call-sites).
+All five examples below are about the same item, a "white desk lamp". Every message first goes through the intent router (call site D) and is then handed to the matching agent. When the seller only says "lamp", the system compares the head noun of that phrase with the head nouns stored on the seller's listed items and resolves it to the white desk lamp. If that comparison is inconclusive, a model decides instead (call site I). The system prompt for each call site lives in `prompts/`.
 
 #### Example 1 · Demand for one item
 
@@ -454,23 +453,6 @@ The entry point is `backend/app/services/retrieval.py`.
    - **Structured**: field matching on category, brand and keywords, tiered into head word, modifier and substring matches.
 5. **Fusion**: RRF (k = 60), with a penalty for results where the query word is only a modifier, then the top 8. Confidence below 0.25 leads to a clarifying question or a "low confidence" note.
 6. **Reply text** comes from templates, with no LLM.
-
----
-
-## LLM call sites
-
-| Site | Purpose | Model | Without a key |
-|---|---|---|---|
-| B | Query understanding and clarification | light | skipped; search still works |
-| C | Sales advisor (tool-calling loop) | main | "unavailable" reply |
-| D | Intent routing, plus the action proposal after an analysis | router (defaults to light) | the whole advisor chat degrades |
-| E | Publishing compliance review (with photo) | main | error, retry prompt |
-| F | Draft listing extraction | main | error |
-| G | Sale-plan agent | main | degraded reply |
-| H | "Sell it later" detection | router | falls back to lexical rules |
-| I | Which of the seller's listings they are naming | router | falls back to matching title tokens |
-
-Each call site's system prompt lives in `prompts/`. The tokens each call uses are logged to the `token_usage_log` table; summarise them with `python scripts/token_report.py`.
 
 ---
 
